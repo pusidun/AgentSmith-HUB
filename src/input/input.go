@@ -45,6 +45,7 @@ type KafkaInputConfig struct {
 	SASL        *common.KafkaSASLConfig     `yaml:"sasl,omitempty"`
 	TLS         *common.KafkaTLSConfig      `yaml:"tls,omitempty"`
 	OffsetReset string                      `yaml:"offset_reset,omitempty"` // earliest, latest, or none
+	Balancer    string                      `yaml:"balancer,omitempty"`
 }
 
 // AliyunSLSInputConfig holds Aliyun SLS-specific config.
@@ -362,6 +363,7 @@ func (in *Input) Start() error {
 			in.kafkaCfg.SASL,
 			in.kafkaCfg.TLS,
 			in.kafkaCfg.OffsetReset,
+			in.kafkaCfg.Balancer,
 			msgChan,
 		)
 		if err != nil {

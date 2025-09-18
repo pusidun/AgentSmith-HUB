@@ -326,7 +326,7 @@ func getSASLMechanism(cfg *KafkaSASLConfig) (sasl.Mechanism, error) {
 }
 
 // NewKafkaConsumer creates a new high-performance Kafka consumer with compression and SASL support.
-func NewKafkaConsumer(brokers []string, group, topic string, compression KafkaCompressionType, saslCfg *KafkaSASLConfig, tlsCfg *KafkaTLSConfig, offsetReset string, msgChan chan map[string]interface{}) (*KafkaConsumer, error) {
+func NewKafkaConsumer(brokers []string, group, topic string, compression KafkaCompressionType, saslCfg *KafkaSASLConfig, tlsCfg *KafkaTLSConfig, offsetReset string, balancer string, msgChan chan map[string]interface{}) (*KafkaConsumer, error) {
 	opts := []kgo.Opt{
 		kgo.SeedBrokers(brokers...),
 		kgo.ConsumerGroup(group),
@@ -361,6 +361,36 @@ func NewKafkaConsumer(brokers []string, group, topic string, compression KafkaCo
 			return time.Duration(tries) * 100 * time.Millisecond // Exponential backoff
 		}),
 	)
+
+	/*
+		RangeAndCooperativeSticky
+		RangeAndRoundRobin
+		StickyAndCooperativeSticky
+		RoundRobinAndCooperativeSticky
+		CooperativeSticky
+		Sticky
+		Range
+		RoundRobin
+	*/
+
+	switch balancer {
+	case "RangeAndCooperativeSticky":
+		opts = append(opts, kgo.Balancers(kgo.RangeBalancer(), kgo.CooperativeStickyBalancer()))
+	case "RangeAndRoundRobin":
+		opts = append(opts, kgo.Balancers(kgo.RangeBalancer(), kgo.RoundRobinBalancer()))
+	case "StickyAndCooperativeSticky":
+		opts = append(opts, kgo.Balancers(kgo.StickyBalancer(), kgo.CooperativeStickyBalancer()))
+	case "RoundRobinAndCooperativeSticky":
+		opts = append(opts, kgo.Balancers(kgo.RoundRobinBalancer(), kgo.CooperativeStickyBalancer()))
+	case "CooperativeSticky":
+		opts = append(opts, kgo.Balancers(kgo.CooperativeStickyBalancer()))
+	case "Sticky":
+		opts = append(opts, kgo.Balancers(kgo.StickyBalancer()))
+	case "Range":
+		opts = append(opts, kgo.Balancers(kgo.RangeBalancer()))
+	case "RoundRobin":
+		opts = append(opts, kgo.Balancers(kgo.RoundRobinBalancer()))
+	}
 
 	// Add compression if specified
 	if compression != KafkaCompressionNone {
