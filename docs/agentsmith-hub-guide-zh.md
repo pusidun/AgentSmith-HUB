@@ -29,7 +29,7 @@ kafka:
   topic: "security_events"
   group: "agentsmith_consumer"
   compression: "snappy"  # 可选：none, snappy, gzip
-  balancer: "RangeAndCooperativeSticky" # 可选: RangeAndCooperativeSticky,RangeAndRoundRobin,StickyAndCooperativeSticky,RoundRobinAndCooperativeSticky,CooperativeSticky,Sticky,Range,RoundRobin
+  balancer: "RangeAndCooperativeSticky" # 可选：消费者平衡策略（详见下方平衡器选项说明）
   # SASL 认证（可选）
   sasl:
     enable: true
@@ -43,6 +43,28 @@ kafka:
     cert_file: "/path/to/cert.pem"
     key_file: "/path/to/key.pem"
 ```
+
+###### Kafka 消费者平衡器选项
+
+`balancer` 字段配置消费者组内分区如何分配给消费者。这是一个高级配置，影响性能和重平衡期间的分区移动：
+
+- **`RangeAndCooperativeSticky`**（推荐）：结合Range和CooperativeSticky平衡器。提供均衡的分区分布，重平衡时干扰最小。适合大多数使用场景。
+
+- **`RangeAndRoundRobin`**：结合Range和RoundRobin平衡器。分布均匀但重平衡时可能导致更多分区移动。
+
+- **`StickyAndCooperativeSticky`**：结合Sticky和CooperativeSticky平衡器。最小化分区重分配，同时支持协作重平衡。
+
+- **`RoundRobinAndCooperativeSticky`**：结合RoundRobin和CooperativeSticky平衡器。均匀分布，支持协作重平衡。
+
+- **`CooperativeSticky`**：仅使用协作粘性平衡器。重平衡时分区移动最少，但要求所有消费者都支持协作重平衡。
+
+- **`Sticky`**：使用传统粘性平衡器。最小化分区重分配，但使用停止世界的重平衡方式。
+
+- **`Range`**：使用范围平衡器。分配连续的分区范围，但可能导致分布不均。
+
+- **`RoundRobin`**：使用轮询平衡器。均匀分配分区，但可能导致不必要的分区移动。
+
+**何时配置**：仅在遇到分区重平衡性能问题或对分区分配策略有特定需求时才修改此设置。未配置时使用Kafka的默认平衡器选择。
 
 ##### 阿里云SLS 
 ```yaml
@@ -161,7 +183,7 @@ kafka:
   topic: "processed_events"
   key: "user_id"  # 可选：指定消息key字段
   compression: "snappy"  # 可选：none, snappy, gzip
-  idempotent: true
+  idempotent: true  # 可选：启用幂等生产者（详见下方幂等配置说明）
   # SASL 认证（可选）
   sasl:
     enable: true
@@ -175,6 +197,19 @@ kafka:
     cert_file: "/path/to/cert.pem"
     key_file: "/path/to/key.pem"
 ```
+
+###### Kafka 生产者幂等配置
+
+`idempotent` 字段控制Kafka生产者是否使用幂等写入来防止消息重复：
+
+- **`true`**（默认，推荐）：启用幂等生产者。保证精确一次传递语义，即使在网络故障或重试期间也能防止重复消息。这是大多数使用场景的最安全选项。
+
+- **`false`**：禁用幂等生产者。仅在以下情况下使用此设置：
+  - 您的Kafka集群缺少所需的ACL权限（IdempotentWrite权限），且无法更新权限
+  - 您使用的是不支持幂等生产者的旧版Kafka
+  - 您有与幂等行为冲突的特定需求
+
+**何时配置**：仅在遇到与IdempotentWrite相关的ACL权限错误或有特定兼容性要求时才设置为 `false`。默认的 `true` 值提供更好的数据一致性保证。
 
 ##### Elasticsearch 
 ```yaml

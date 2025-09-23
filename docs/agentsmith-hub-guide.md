@@ -29,7 +29,7 @@ kafka:
   topic: "security_events"
   group: "agentsmith_consumer"
   compression: "snappy"  # Optional: none, snappy, gzip
-  balancer: "RangeAndCooperativeSticky" # Optional: RangeAndCooperativeSticky,RangeAndRoundRobin,StickyAndCooperativeSticky,RoundRobinAndCooperativeSticky,CooperativeSticky,Sticky,Range,RoundRobin
+  balancer: "RangeAndCooperativeSticky" # Optional: Consumer balancer strategy (see balancer options below)
   # SASL Authentication (optional)
   sasl:
     enable: true
@@ -43,6 +43,28 @@ kafka:
     cert_file: "/path/to/cert.pem"
     key_file: "/path/to/key.pem"
 ```
+
+###### Kafka Consumer Balancer Options
+
+The `balancer` field configures how partitions are assigned to consumers in a consumer group. This is an advanced configuration that affects performance and partition movement during rebalancing:
+
+- **`RangeAndCooperativeSticky`** (Recommended): Combines Range and CooperativeSticky balancers. Provides balanced partition distribution with minimal disruption during rebalancing. Best for most use cases.
+
+- **`RangeAndRoundRobin`**: Combines Range and RoundRobin balancers. Good for even distribution but may cause more partition movement during rebalancing.
+
+- **`StickyAndCooperativeSticky`**: Combines Sticky and CooperativeSticky balancers. Minimizes partition reassignments while supporting cooperative rebalancing.
+
+- **`RoundRobinAndCooperativeSticky`**: Combines RoundRobin and CooperativeSticky balancers. Even distribution with cooperative rebalancing support.
+
+- **`CooperativeSticky`**: Uses only cooperative sticky balancer. Minimal partition movement during rebalancing, but requires all consumers to support cooperative rebalancing.
+
+- **`Sticky`**: Uses traditional sticky balancer. Minimizes partition reassignments but uses stop-the-world rebalancing.
+
+- **`Range`**: Uses range balancer. Assigns contiguous partition ranges but may result in uneven distribution.
+
+- **`RoundRobin`**: Uses round-robin balancer. Distributes partitions evenly but may cause unnecessary partition movement.
+
+**When to configure**: Only modify this setting if you experience issues with partition rebalancing performance or have specific requirements for partition assignment strategy. The default behavior (when omitted) uses Kafka's standard balancer selection.
 
 ##### Alibaba Cloud SLS 
 ```yaml
@@ -161,7 +183,7 @@ kafka:
   topic: "processed_events"
   key: "user_id"  # Optional: specify message key field
   compression: "snappy"  # Optional: none, snappy, gzip
-  idempotent: true
+  idempotent: true  # Optional: Enable idempotent producer (see idempotent options below)
   # SASL Authentication (optional)
   sasl:
     enable: true
@@ -175,6 +197,19 @@ kafka:
     cert_file: "/path/to/cert.pem"
     key_file: "/path/to/key.pem"
 ```
+
+###### Kafka Producer Idempotent Configuration
+
+The `idempotent` field controls whether the Kafka producer uses idempotent writes to prevent message duplication:
+
+- **`true`** (Default, Recommended): Enables idempotent producer. Guarantees exactly-once delivery semantics and prevents duplicate messages even during network failures or retries. This is the safest option for most use cases.
+
+- **`false`**: Disables idempotent producer. Use this setting only when:
+  - Your Kafka cluster lacks the required ACLs (IdempotentWrite permission) and you cannot update them
+  - You're using an older Kafka version that doesn't support idempotent producers
+  - You have specific requirements that conflict with idempotent behavior
+
+**When to configure**: Only set this to `false` if you encounter ACL permission errors related to IdempotentWrite or have specific compatibility requirements. The default `true` value provides better data consistency guarantees.
 
 ##### Elasticsearch 
 ```yaml

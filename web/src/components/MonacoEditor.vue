@@ -1588,6 +1588,46 @@ function getInputValueCompletions(context, range, fullText) {
     });
   }
   
+  // balancer属性值补全（kafka输入）
+  else if (context.currentKey === 'balancer' && context.currentSection === 'kafka') {
+    const balancerTypes = [
+      { value: 'RangeAndCooperativeSticky', description: 'Combination of Range and CooperativeSticky balancers (recommended)' },
+      { value: 'RangeAndRoundRobin', description: 'Combination of Range and RoundRobin balancers' },
+      { value: 'StickyAndCooperativeSticky', description: 'Combination of Sticky and CooperativeSticky balancers' },
+      { value: 'RoundRobinAndCooperativeSticky', description: 'Combination of RoundRobin and CooperativeSticky balancers' },
+      { value: 'CooperativeSticky', description: 'Cooperative sticky balancer for minimal partition movement' },
+      { value: 'Sticky', description: 'Sticky balancer to minimize partition reassignments' },
+      { value: 'Range', description: 'Range balancer assigns contiguous partitions' },
+      { value: 'RoundRobin', description: 'Round-robin balancer distributes partitions evenly' }
+    ];
+    
+    const currentValue = context.currentValue ? context.currentValue.toLowerCase() : '';
+    
+    balancerTypes.forEach((type, index) => {
+      if (!currentValue || type.value.toLowerCase().includes(currentValue)) {
+        if (!suggestions.some(s => s.label === type.value)) {
+          // 计算排序权重：完全匹配 > 前缀匹配 > 包含匹配
+          let sortWeight = '2'; // 默认包含匹配
+          if (currentValue && type.value.toLowerCase() === currentValue) {
+            sortWeight = '0'; // 完全匹配
+          } else if (currentValue && type.value.toLowerCase().startsWith(currentValue)) {
+            sortWeight = '1'; // 前缀匹配
+          }
+          
+          suggestions.push({
+            label: type.value,
+            kind: monaco.languages.CompletionItemKind.EnumMember,
+            documentation: type.description,
+            insertText: type.value,
+            range: range,
+            sortText: `${sortWeight}_${String(index).padStart(2, '0')}_${type.value}`,
+            detail: `Kafka Consumer Balancer: ${type.value}`
+          });
+        }
+      }
+    });
+  }
+  
   // enable属性值补全
   else if (context.currentKey === 'enable') {
     const enableValues = ['true', 'false'];
@@ -1868,6 +1908,8 @@ function getInputKeyCompletions(context, range, fullText) {
       { key: 'topic', desc: 'Kafka topic name' },
       { key: 'group', desc: 'Consumer group name' },
       { key: 'compression', desc: 'Message compression type' },
+      { key: 'offset_reset', desc: 'Where to start consuming when no committed offset exists' },
+      { key: 'balancer', desc: 'Consumer balancer strategy for partition assignment' },
       { key: 'sasl', desc: 'SASL authentication configuration' },
       { key: 'tls', desc: 'TLS configuration' }
     ];
