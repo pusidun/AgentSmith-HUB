@@ -241,11 +241,17 @@ async function renderMarkdown(markdown) {
     // 处理标题ID
     const processedMarkdown = addHeaderIds(markdown)
     
+    // 修复图片路径：将相对路径转换为绝对路径
+    const fixedMarkdown = processedMarkdown.replace(
+      /!\[([^\]]*)\]\(png\/([^)]+)\)/g,
+      '![$1](/png/$2)'
+    )
+    
     // 渲染为HTML
-    const html = md.render(processedMarkdown)
+    const html = md.render(fixedMarkdown)
     renderedHtml.value = html
 
-// 生成目录
+    // 生成目录
     generateTableOfContents(processedMarkdown)
     
   } catch (err) {

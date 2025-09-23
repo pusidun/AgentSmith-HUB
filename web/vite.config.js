@@ -26,6 +26,28 @@ function copyDocsToPublic() {
       console.warn(`⚠ Warning: ${file} not found in docs directory`)
     }
   })
+  
+  // Copy png directory
+  const pngSrcDir = join(docsDir, 'png')
+  const pngDestDir = join(publicDir, 'png')
+  
+  if (existsSync(pngSrcDir)) {
+    if (!existsSync(pngDestDir)) {
+      mkdirSync(pngDestDir, { recursive: true })
+    }
+    
+    // Copy all PNG files
+    const { readdirSync } = require('fs')
+    const pngFiles = readdirSync(pngSrcDir).filter(file => file.endsWith('.png'))
+    pngFiles.forEach(file => {
+      const srcPath = join(pngSrcDir, file)
+      const destPath = join(pngDestDir, file)
+      copyFileSync(srcPath, destPath)
+      console.log(`✓ Copied png/${file} to public directory`)
+    })
+  } else {
+    console.warn(`⚠ Warning: png directory not found in docs directory`)
+  }
 }
 
 // https://vitejs.dev/config/
