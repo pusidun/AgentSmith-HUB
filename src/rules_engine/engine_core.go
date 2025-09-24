@@ -424,9 +424,13 @@ func (r *Ruleset) EngineCheck(data map[string]interface{}) []map[string]interfac
 	for ruleIndex := range r.Rules {
 		rule := &r.Rules[ruleIndex] // Use pointer to avoid copying
 
-		// Create data copy for this rule execution only if rule modifies data
+		// Create data copy for this rule execution
 		var dataCopy map[string]interface{}
-		if r.ruleModifiesData(rule) {
+		if r.IsDetection {
+			// For detection rules, always use deep copy to avoid rule interference
+			// This prevents multiple rules from accumulating hit rule IDs on the same data reference
+			dataCopy = common.MapDeepCopy(data)
+		} else if r.ruleModifiesData(rule) {
 			dataCopy = common.MapDeepCopy(data)
 		} else {
 			dataCopy = data // Use original data if rule doesn't modify it
