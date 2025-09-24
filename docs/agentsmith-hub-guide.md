@@ -699,7 +699,7 @@ One of the major features of the rules engine is flexible execution order:
 **Execution Flow:**
 - The rules engine executes operations according to the appearance order of tags in XML
 - If check operations (check, threshold) fail, the rule ends immediately
-- Processing operations (append, del, plugin) only execute after all checks pass
+- Processing operations (append, modify, del, plugin) only execute after all checks pass
 
 #### 🔍 Syntax Details: `<threshold>` Tag
 
@@ -1133,6 +1133,7 @@ AgentSmith-HUB provides rich built-in plugins that can be used without additiona
 | `cidrMatch` | Check if IP is in CIDR range | ip (string), cidr (string) | `cidrMatch(client_ip, "192.168.1.0/24")` |
 | `geoMatch` | Check IP's country | ip (string), countryISO (string) | `geoMatch(source_ip, "US")` |
 | `suppressOnce` | Alert suppression | key (any), windowSec (int), ruleid (string, optional) | `suppressOnce(alert_key, 300, "rule_001")` |
+| `suppress` | Alert suppression (new) | window (int or string), keyParts(...any) | `suppress(300, "rule_001", source_ip, destination_ip)`  `suppress("5m", "rule_001", source_ip, destination_ip, host_id)` |
 
 ##### Data Processing Plugins (Return various types)
 
@@ -1211,10 +1212,24 @@ AgentSmith-HUB provides rich built-in plugins that can be used without additiona
 
 ### 6.2 Alert Suppression Example
 
+Old version:
 ```xml
 <rule id="suppression_example" name="Alert Suppression">
     <check type="EQU" field="event_type">login_failed</check>
     <check type="PLUGIN">suppressOnce(source_ip, 300, "login_brute_force")</check>
+    <append field="alert_type">brute_force</append>
+</rule>
+```
+New version:
+```xml
+<rule id="suppression_example" name="Alert Suppression">
+    <check type="EQU" field="event_type">login_failed</check>
+    <check type="PLUGIN">suppress(300, "login_brute_force", source_ip)</check>
+    <append field="alert_type">brute_force</append>
+</rule>
+<rule id="suppression_example" name="Alert Suppression">
+    <check type="EQU" field="event_type">login_failed</check>
+    <check type="PLUGIN">suppress("5m", "login_brute_force", source_ip, host_id)</check>
     <append field="alert_type">brute_force</append>
 </rule>
 ```
@@ -1415,9 +1430,11 @@ Log processing rule:
 </rule>
 ```
 
-#### ⚠️ Alert Suppression Best Practices (suppressOnce)
+#### ⚠️ Alert Suppression Best Practices
 
 The alert suppression plugin can prevent the same alert from triggering repeatedly in a short time.
+
+##### suppressOnce (Old suppression plugin)
 
 **Why do we need the ruleid parameter?**
 
@@ -1450,6 +1467,15 @@ If you don't use the `ruleid` parameter, suppression of the same key by differen
     <check type="PLUGIN">suppressOnce(source_ip, 300, "login_anomaly")</check>
 </rule>
 ```
+##### suppress (New suppression plugin)
+
+In the new suppression plugin, the time window is the first parameter, and both string and integer forms are supported, for example:
+- Strings: 5m, 1h, 24h
+- Integers: 300, 3600, 86400
+
+Also, as many scenarios require using more than one data field as the suppression key, the plugin supports passing any number of fields from the second parameter onward. These fields are concatenated to form a single key, meeting the above requirement.
+
+Note: same as the old plugin, if you do not want suppressions for the same key to interfere across different rules, include a unique alert identifier (e.g., the rule id) as part of the key from the second parameter onward.
 
 ### 6.4 Exclude Ruleset
 
@@ -1939,6 +1965,25 @@ When a ruleset contains multiple `<rule>` elements, they have an **OR relationsh
 #### Plugin Execution `<plugin>`
 ```xml
 <plugin>plugin_function(parameter1, parameter2)</plugin>
+```
+
+#### Field Modify `<modify>`
+```xml
+<modify field="field_name">value</modify>
+```
+
+- Use to update an existing field or replace the entire record.
+- Two modes are supported via the optional `type` attribute:
+  - Empty (literal assignment, default): assign the literal body text to `field`.
+  - `PLUGIN`: execute a plugin and use its return value to set specified `field` or replace the entire record(only when `field` is undefined).
+
+Syntax (PLUGIN mode):
+```xml
+<!-- Assign plugin result to a field -->
+<modify type="PLUGIN" field="risk_score">calculateRisk(amount, user.daily_limit)</modify>
+
+<!-- Replace entire data with plugin result (must return a map) -->
+<modify type="PLUGIN">transformRecord(_$ORIDATA)</modify>
 ```
 
 ### 8.6 Field Access Syntax
