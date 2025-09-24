@@ -695,7 +695,7 @@ OIDC_SCOPE="openid profile email"
 **执行流程：**
 - 规则引擎按照 XML 中标签的出现顺序执行操作
 - 检查类操作（check、threshold）如果失败，规则立即结束
-- 处理类操作（append、del、plugin）只在所有检查通过后执行
+- 处理类操作（append、modify、del、plugin）只在所有检查通过后执行
 
 #### 🔍 语法详解：`<threshold>` 标签
 
@@ -1128,6 +1128,7 @@ AgentSmith-HUB 提供了丰富的内置插件，无需额外开发即可使用�
 | `cidrMatch` | 检查IP是否在CIDR范围内 | ip (string), cidr (string) | `cidrMatch(client_ip, "192.168.1.0/24")` |
 | `geoMatch` | 检查IP所属国家 | ip (string), countryISO (string) | `geoMatch(source_ip, "US")` |
 | `suppressOnce` | 告警抑制 | key (any), windowSec (int), ruleid (string, optional) | `suppressOnce(alert_key, 300, "rule_001")` |
+| `suppress` | 告警抑制(新版) | window (int or string), keyParts(...any) | `suppress(300, "rule_001", source_ip, destination_ip)`  `suppress("5m", "rule_001", source_ip, destination_ip, host_id)` |
 
 ##### 数据处理插件（返回各种类型）
 
@@ -1205,11 +1206,24 @@ AgentSmith-HUB 提供了丰富的内置插件，无需额外开发即可使用�
 ```
 
 ### 6.2 告警抑制示例
-
+旧版：
 ```xml
 <rule id="suppression_example" name="Alert Suppression">
     <check type="EQU" field="event_type">login_failed</check>
     <check type="PLUGIN">suppressOnce(source_ip, 300, "login_brute_force")</check>
+    <append field="alert_type">brute_force</append>
+</rule>
+```
+新版：
+```xml
+<rule id="suppression_example" name="Alert Suppression">
+    <check type="EQU" field="event_type">login_failed</check>
+    <check type="PLUGIN">suppress(300, "login_brute_force", source_ip)</check>
+    <append field="alert_type">brute_force</append>
+</rule>
+<rule id="suppression_example" name="Alert Suppression">
+    <check type="EQU" field="event_type">login_failed</check>
+    <check type="PLUGIN">suppress("5m", "login_brute_force", source_ip, host_id)</check>
     <append field="alert_type">brute_force</append>
 </rule>
 ```
@@ -1410,9 +1424,11 @@ AgentSmith-HUB 提供了丰富的内置插件，无需额外开发即可使用�
 </rule>
 ```
 
-#### ⚠️ 告警抑制最佳实践（suppressOnce）
+#### ⚠️ 告警抑制最佳实践
 
 告警抑制插件可以防止同一告警在短时间内重复触发。
+
+##### suppressOnce(旧版抑制插件)
 
 **为什么需要 ruleid 参数？**
 
@@ -1445,7 +1461,15 @@ AgentSmith-HUB 提供了丰富的内置插件，无需额外开发即可使用�
     <check type="PLUGIN">suppressOnce(source_ip, 300, "login_anomaly")</check>
 </rule>
 ```
+##### suppress(新版抑制插件)
 
+在新版本抑制插件中，时间窗口被放在了第一个参数，并同时支持通过传入字符串或整数的形式进行设置，例如：
+- 字符串：5m, 1h, 24h
+- 整数：300, 3600, 86400
+
+同时，考虑到众多场景下会使用不只一个数据字段作为抑制的Key，插件在第二个参数及之后支持传入任意多个字段，这些字段在抑制时会被拼接成一个Key，从而满足上述使用需求。
+
+值得注意的是，与旧版本插件相同，如果不希望不同规则对同一Key的抑制相互影响，需要在第二个参数及之后传入告警的唯一标识作为Key的一部分。
 ### 6.4 排除规则集
 
 排除用于过滤掉不需要处理的数据（ruleset type 为 EXCLUDE）。排除的特殊行为：
@@ -1934,6 +1958,25 @@ AgentSmith-HUB 提供了丰富的内置插件，无需额外开发即可使用�
 #### 插件执行 `<plugin>`
 ```xml
 <plugin>插件函数(参数1, 参数2)</plugin>
+```
+
+#### 字段修改 `<modify>`
+```xml
+<modify field="字段名">值</modify>
+```
+
+- 用于更新已有字段，或替换整条记录。
+- 通过可选的 `type` 属性支持两种模式：
+  - 空（字面量赋值，默认）：将标签体文本赋值给 `field`
+  - `PLUGIN`：执行插件并使用其返回值设置`field`或者替换整条记录(当field未指定时)。
+
+语法（PLUGIN 模式）：
+```xml
+<!-- 将插件返回值赋给某个字段 -->
+<modify type="PLUGIN" field="risk_score">calculateRisk(amount, user.daily_limit)</modify>
+
+<!-- 用插件返回的整对象替换当前记录 -->
+<modify type="PLUGIN">transformRecord(_$ORIDATA)</modify>
 ```
 
 ### 8.6 字段访问语法
