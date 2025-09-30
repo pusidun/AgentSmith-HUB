@@ -55,37 +55,73 @@ func (sl *SyncListener) Start() {
 
 // listenSyncCommands listens for sync commands from leader
 func (sl *SyncListener) listenSyncCommands() {
-	client := common.GetRedisClient()
-	if client == nil {
-		logger.Error("Redis client not available for sync listener")
-		return
-	}
+	// Retry loop with exponential backoff for Redis connection failures
+	retryCount := 0
+	maxRetryDelay := 30 * time.Second
 
-	pubsub := client.Subscribe(context.Background(), "cluster:sync_command")
-	defer pubsub.Close()
-
-	ch := pubsub.Channel()
 	for {
 		select {
-		case msg := <-ch:
-			var syncCmd map[string]interface{}
-			if err := json.Unmarshal([]byte(msg.Payload), &syncCmd); err != nil {
-				logger.Error("Failed to unmarshal sync command", "error", err)
-				continue
-			}
-
-			// Check if command is for this node
-			// Commands without node_id are broadcast commands (like publish_complete)
-			if nodeID, ok := syncCmd["node_id"].(string); ok && nodeID != sl.nodeID {
-				continue
-			}
-
-			// Handle sync command
-			sl.handleSyncCommand(syncCmd)
-
 		case <-sl.stopChan:
 			return
+		default:
 		}
+
+		client := common.GetRedisClient()
+		if client == nil {
+			logger.Error("Redis client not available for sync listener")
+			retryDelay := time.Duration(1<<uint(retryCount)) * time.Second
+			if retryDelay > maxRetryDelay {
+				retryDelay = maxRetryDelay
+			}
+			logger.Info("Retrying sync listener connection", "delay", retryDelay, "retry_count", retryCount)
+			time.Sleep(retryDelay)
+			retryCount++
+			continue
+		}
+
+		pubsub := client.Subscribe(context.Background(), "cluster:sync_command")
+		logger.Info("Sync listener subscribed to Redis pub/sub channel")
+		retryCount = 0 // Reset retry count on successful connection
+
+		// Listen for messages
+		ch := pubsub.Channel()
+		disconnected := false
+
+		for !disconnected {
+			select {
+			case msg, ok := <-ch:
+				if !ok {
+					// Channel closed, need to reconnect
+					logger.Warn("Sync command pub/sub channel closed, reconnecting...")
+					disconnected = true
+					break
+				}
+
+				var syncCmd map[string]interface{}
+				if err := json.Unmarshal([]byte(msg.Payload), &syncCmd); err != nil {
+					logger.Error("Failed to unmarshal sync command", "error", err)
+					continue
+				}
+
+				// Check if command is for this node
+				// Commands without node_id are broadcast commands (like publish_complete)
+				if nodeID, ok := syncCmd["node_id"].(string); ok && nodeID != sl.nodeID {
+					continue
+				}
+
+				// Handle sync command
+				sl.handleSyncCommand(syncCmd)
+
+			case <-sl.stopChan:
+				pubsub.Close()
+				return
+			}
+		}
+
+		// Clean up before reconnecting
+		pubsub.Close()
+		logger.Info("Sync listener disconnected, will reconnect in 2 seconds...")
+		time.Sleep(2 * time.Second)
 	}
 }
 
@@ -152,6 +188,7 @@ func (sl *SyncListener) SyncInstructions(toVersion string) error {
 	// Track instruction execution details
 	var processedInstructions []string
 	var failedInstructions []string
+	var missingInstructions []int64
 	var instructions []Instruction
 	var compacted uint64
 
@@ -167,11 +204,17 @@ func (sl *SyncListener) SyncInstructions(toVersion string) error {
 		key := fmt.Sprintf("cluster:instruction:%d", version)
 		data, err := common.RedisGet(key)
 		if data == GetDeletedIntentionsString() {
+			compacted++
 			continue
 		}
 
 		if err != nil {
-			logger.Error("Instruction not found (likely compacted), skipping", "version", version)
+			// Record missing instruction - this could indicate a problem
+			missingInstructions = append(missingInstructions, version)
+			logger.Warn("Instruction not found in Redis", 
+				"version", version, 
+				"error", err,
+				"this_may_cause_inconsistency", true)
 			continue
 		}
 
@@ -184,6 +227,25 @@ func (sl *SyncListener) SyncInstructions(toVersion string) error {
 			instructions = append(instructions, instruction)
 		} else {
 			compacted++
+		}
+	}
+	
+	// Check if too many instructions are missing
+	totalInstructionsExpected := endVersion - sl.currentVersion
+	missingCount := int64(len(missingInstructions))
+	if missingCount > 0 {
+		missingRatio := float64(missingCount) / float64(totalInstructionsExpected)
+		logger.Warn("Some instructions are missing during sync",
+			"missing_count", missingCount,
+			"total_expected", totalInstructionsExpected,
+			"missing_ratio", fmt.Sprintf("%.2f%%", missingRatio*100),
+			"missing_versions", missingInstructions)
+		
+		// If more than 10% instructions are missing, this is a serious issue
+		if missingRatio > 0.1 {
+			logger.Error("High ratio of missing instructions detected - cluster state may be inconsistent",
+				"missing_ratio", fmt.Sprintf("%.2f%%", missingRatio*100),
+				"recommendation", "consider full resync or manual intervention")
 		}
 	}
 	slices.SortStableFunc(instructions, func(a, b Instruction) int {
@@ -216,20 +278,23 @@ func (sl *SyncListener) SyncInstructions(toVersion string) error {
 	sl.baseVersion = leaderParts[0]
 
 	// Log final sync result
-	if len(failedInstructions) > 0 {
-		logger.Error("Instructions synced with some failures",
+	if len(failedInstructions) > 0 || len(missingInstructions) > 0 {
+		logger.Error("Instructions synced with some failures or missing instructions",
 			"from", sl.GetCurrentVersion(),
 			"to", toVersion,
 			"compacted", compacted,
 			"processed", len(processedInstructions),
 			"failed", len(failedInstructions),
+			"missing", len(missingInstructions),
 			"successful_instructions", strings.Join(processedInstructions, "; "),
-			"failed_instructions", strings.Join(failedInstructions, "; "))
+			"failed_instructions", strings.Join(failedInstructions, "; "),
+			"missing_versions", missingInstructions)
 	} else {
 		logger.Info("Instructions synced successfully",
 			"from", sl.GetCurrentVersion(),
 			"to", toVersion,
 			"count", len(processedInstructions),
+			"compacted", compacted,
 			"instructions", strings.Join(processedInstructions, "; "))
 	}
 

@@ -143,9 +143,15 @@ func (im *InstructionManager) loadAllInstructions(maxVersion int64) ([]*Instruct
 }
 
 func (im *InstructionManager) CompactAndSaveInstructions(new *Instruction) error {
+	// Wait for all followers to complete their current synchronization
+	// This is critical to prevent compaction from interfering with ongoing sync operations
 	if err := im.WaitForAllFollowersIdle(90 * time.Second); err != nil {
-		logger.Error("Some followers may still be executing, proceeding with caution", "error", err)
+		logger.Error("Timeout waiting for followers to complete sync, aborting compaction for safety", "error", err)
+		// Return error instead of proceeding - safety first
+		return fmt.Errorf("cannot compact while followers are still syncing: %w", err)
 	}
+
+	logger.Info("All followers are idle, proceeding with instruction compaction")
 
 	originalVersion, err := im.setCurrentVersion(0)
 	if err != nil {

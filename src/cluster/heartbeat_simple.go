@@ -24,11 +24,11 @@ type HeartbeatData struct {
 
 // HeartbeatManager manages heartbeat and version sync
 type HeartbeatManager struct {
-	nodeID           string
-	isLeader         bool
-	nodes            map[string]HeartbeatData
-	mu               sync.RWMutex
-	stopChan         chan struct{}
+	nodeID            string
+	isLeader          bool
+	nodes             map[string]HeartbeatData
+	mu                sync.RWMutex
+	stopChan          chan struct{}
 	heartbeatInterval time.Duration // Randomized heartbeat interval for followers
 }
 
@@ -41,7 +41,7 @@ func InitHeartbeatManager(nodeID string, isLeader bool) {
 	baseInterval := 5 * time.Second
 	jitter := time.Duration((time.Now().UnixNano() % 4000)) * time.Millisecond // 0-4 seconds
 	heartbeatInterval := baseInterval + jitter
-	
+
 	GlobalHeartbeatManager = &HeartbeatManager{
 		nodeID:            nodeID,
 		isLeader:          isLeader,
@@ -49,9 +49,9 @@ func InitHeartbeatManager(nodeID string, isLeader bool) {
 		stopChan:          make(chan struct{}),
 		heartbeatInterval: heartbeatInterval,
 	}
-	
+
 	if !isLeader {
-		logger.Info("Follower heartbeat initialized with randomized interval", 
+		logger.Info("Follower heartbeat initialized with randomized interval",
 			"node_id", nodeID, "interval", heartbeatInterval)
 	}
 }
@@ -87,7 +87,7 @@ func (hm *HeartbeatManager) updateLeaderSystemMetrics() {
 	ticker := time.NewTicker(hm.heartbeatInterval)
 	defer ticker.Stop()
 
-	logger.Info("Starting leader system metrics update with randomized interval", 
+	logger.Info("Starting leader system metrics update with randomized interval",
 		"node_id", hm.nodeID, "interval", hm.heartbeatInterval)
 
 	for {
@@ -111,7 +111,7 @@ func (hm *HeartbeatManager) startFollowerHeartbeat() {
 	ticker := time.NewTicker(hm.heartbeatInterval)
 	defer ticker.Stop()
 
-	logger.Info("Starting follower heartbeat with randomized interval", 
+	logger.Info("Starting follower heartbeat with randomized interval",
 		"node_id", hm.nodeID, "interval", hm.heartbeatInterval)
 
 	for {
@@ -175,65 +175,101 @@ func (hm *HeartbeatManager) listenHeartbeats() {
 		return
 	}
 
-	client := common.GetRedisClient()
-	if client == nil {
-		logger.Error("Redis client not available")
-		return
-	}
-
 	// Leader should track itself in Redis for node enumeration
 	hm.trackNodeInRedis(hm.nodeID)
 
-	pubsub := client.Subscribe(context.Background(), "cluster:heartbeat")
-	defer pubsub.Close()
+	// Retry loop with exponential backoff for Redis connection failures
+	retryCount := 0
+	maxRetryDelay := 30 * time.Second
 
-	ch := pubsub.Channel()
 	for {
 		select {
-		case msg := <-ch:
-			var heartbeat HeartbeatData
-			if err := json.Unmarshal([]byte(msg.Payload), &heartbeat); err != nil {
-				logger.Error("Failed to unmarshal heartbeat", "error", err)
-				continue
-			}
-
-			// Skip self
-			if heartbeat.NodeID == hm.nodeID {
-				continue
-			}
-
-			// Check if this is a new node (not in memory)
-			hm.mu.Lock()
-			_, exists := hm.nodes[heartbeat.NodeID]
-			if !exists {
-				// New node detected, track it in Redis for node enumeration
-				hm.trackNodeInRedis(heartbeat.NodeID)
-				logger.Info("New follower node detected and tracked", "node_id", heartbeat.NodeID)
-			}
-
-			// Update node info in memory
-			hm.nodes[heartbeat.NodeID] = heartbeat
-			hm.mu.Unlock()
-
-			// Store system metrics in cluster system manager
-			if common.GlobalClusterSystemManager != nil {
-				systemMetrics := &common.SystemMetrics{
-					NodeID:         heartbeat.NodeID,
-					CPUPercent:     heartbeat.CPUPercent,
-					MemoryUsedMB:   heartbeat.MemoryUsedMB,
-					MemoryPercent:  heartbeat.MemoryPercent,
-					GoroutineCount: heartbeat.GoroutineCount,
-					Timestamp:      time.Unix(heartbeat.Timestamp, 0),
-				}
-				common.GlobalClusterSystemManager.AddSystemMetrics(systemMetrics)
-			}
-
-			// Check version and send sync command if needed
-			hm.checkVersionSync(heartbeat)
-
 		case <-hm.stopChan:
 			return
+		default:
 		}
+
+		client := common.GetRedisClient()
+		if client == nil {
+			logger.Error("Redis client not available for heartbeat listener")
+			retryDelay := time.Duration(1<<uint(retryCount)) * time.Second
+			if retryDelay > maxRetryDelay {
+				retryDelay = maxRetryDelay
+			}
+			logger.Info("Retrying heartbeat listener connection", "delay", retryDelay, "retry_count", retryCount)
+			time.Sleep(retryDelay)
+			retryCount++
+			continue
+		}
+
+		pubsub := client.Subscribe(context.Background(), "cluster:heartbeat")
+		logger.Info("Heartbeat listener subscribed to Redis pub/sub channel")
+		retryCount = 0 // Reset retry count on successful connection
+
+		// Listen for messages
+		ch := pubsub.Channel()
+		disconnected := false
+
+		for !disconnected {
+			select {
+			case msg, ok := <-ch:
+				if !ok {
+					// Channel closed, need to reconnect
+					logger.Warn("Heartbeat pub/sub channel closed, reconnecting...")
+					disconnected = true
+					break
+				}
+
+				var heartbeat HeartbeatData
+				if err := json.Unmarshal([]byte(msg.Payload), &heartbeat); err != nil {
+					logger.Error("Failed to unmarshal heartbeat", "error", err)
+					continue
+				}
+
+				// Skip self
+				if heartbeat.NodeID == hm.nodeID {
+					continue
+				}
+
+				// Check if this is a new node (not in memory)
+				hm.mu.Lock()
+				_, exists := hm.nodes[heartbeat.NodeID]
+				if !exists {
+					// New node detected, track it in Redis for node enumeration
+					hm.trackNodeInRedis(heartbeat.NodeID)
+					logger.Info("New follower node detected and tracked", "node_id", heartbeat.NodeID)
+				}
+
+				// Update node info in memory
+				hm.nodes[heartbeat.NodeID] = heartbeat
+				hm.mu.Unlock()
+
+				// Store system metrics in cluster system manager
+				if common.GlobalClusterSystemManager != nil {
+					systemMetrics := &common.SystemMetrics{
+						NodeID:         heartbeat.NodeID,
+						CPUPercent:     heartbeat.CPUPercent,
+						MemoryUsedMB:   heartbeat.MemoryUsedMB,
+						MemoryPercent:  heartbeat.MemoryPercent,
+						GoroutineCount: heartbeat.GoroutineCount,
+						Timestamp:      time.Unix(heartbeat.Timestamp, 0),
+					}
+					common.GlobalClusterSystemManager.AddSystemMetrics(systemMetrics)
+				}
+
+				// Check version and send sync command if needed
+				hm.checkVersionSync(heartbeat)
+
+			case <-hm.stopChan:
+				pubsub.Close()
+				return
+			}
+		}
+
+		// Clean up before reconnecting
+		pubsub.Close()
+		logger.Info("Heartbeat listener disconnected, will reconnect in 2 seconds...")
+		time.Sleep(2 * time.Second)
 	}
 }
 
@@ -316,12 +352,22 @@ func (hm *HeartbeatManager) cleanupOfflineNodes() {
 			hm.mu.Lock()
 			now := time.Now().Unix()
 			for nodeID, heartbeat := range hm.nodes {
-				// Remove nodes that haven't sent heartbeat for more than 2 minutes (120 seconds)
-				// With heartbeat every 5 seconds, missing 2 heartbeats means unhealthy (10s),
-				// and missing 24 heartbeats means offline and should be removed (120s)
-				if now-heartbeat.Timestamp > 120 {
+				timeSinceLastHeartbeat := now - heartbeat.Timestamp
+
+				// Node offline detection threshold: 60 seconds
+				// Optimized from 120s to 60s for faster offline detection
+				// With heartbeat every ~5 seconds, 60 seconds allows sufficient time
+				// for network recovery while detecting true failures faster
+				//
+				// Health status (sent to frontend):
+				// - Healthy: last heartbeat within 10 seconds
+				// - Not Healthy: last heartbeat > 10 seconds (red indicator in UI)
+				if timeSinceLastHeartbeat > 60 {
 					delete(hm.nodes, nodeID)
-					logger.Debug("Removed offline node", "node_id", nodeID)
+					logger.Info("Removed offline node from cluster",
+						"node_id", nodeID,
+						"last_heartbeat_seconds_ago", timeSinceLastHeartbeat,
+						"last_version", heartbeat.Version)
 				}
 			}
 			hm.mu.Unlock()

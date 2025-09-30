@@ -138,9 +138,8 @@ func GetClusterStatus() map[string]interface{} {
 		now := time.Now().Unix()
 		for nodeID, heartbeat := range nodes {
 			// Calculate health status based on heartbeat timing
-			// Healthy: last heartbeat within 10 seconds (missed < 2 heartbeats)
-			// Unhealthy: last heartbeat between 10-120 seconds (missed 2-24 heartbeats)
-			// Offline: > 120 seconds (will be removed by cleanup, won't appear here)
+			// Healthy: last heartbeat within 10 seconds (< 2 missed heartbeats)
+			// Offline nodes (> 60 seconds) are removed by cleanup and won't appear here
 			timeSinceLastHeartbeat := now - heartbeat.Timestamp
 			isHealthy := timeSinceLastHeartbeat <= 10
 
