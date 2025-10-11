@@ -152,7 +152,7 @@ func (s *StandardMCPServer) handleToolsList(id interface{}) ([]byte, error) {
 
 	for _, tool := range tools {
 		// Convert tool schema to JSON Schema format
-		properties := make(map[string]interface{})
+		properties := make(map[string]interface{}, len(tool.InputSchema))
 		required := make([]string, 0)
 
 		for argName, argDef := range tool.InputSchema {

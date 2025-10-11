@@ -14,7 +14,7 @@ import (
 func RecordProjectOperation(operationType OperationType, projectID, status, errorMsg string, details map[string]interface{}) {
 	// Ensure details map exists and contains execution node information
 	if details == nil {
-		details = make(map[string]interface{})
+		details = make(map[string]interface{}, 3)
 	}
 
 	// Always record the actual execution node (don't override if already set)
@@ -62,7 +62,7 @@ func RecordProjectOperation(operationType OperationType, projectID, status, erro
 func RecordClusterInstruction(operationType OperationType, instructionType, componentID, componentType string, status, errorMsg, content string, details map[string]interface{}) {
 	// Ensure details map exists and contains execution node information
 	if details == nil {
-		details = make(map[string]interface{})
+		details = make(map[string]interface{}, 3)
 	}
 
 	// Always record the actual execution node (don't override if already set)

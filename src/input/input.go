@@ -405,7 +405,7 @@ func (in *Input) Start() error {
 
 					// Add input ID to message data
 					if msg == nil {
-						msg = make(map[string]interface{})
+						msg = make(map[string]interface{}, 2)
 					}
 					msg["_hub_input"] = in.Id
 
@@ -486,7 +486,7 @@ func (in *Input) Start() error {
 
 					// Add input ID to message data
 					if msg == nil {
-						msg = make(map[string]interface{})
+						msg = make(map[string]interface{}, 2)
 					}
 					msg["_hub_input"] = in.Id
 
@@ -533,7 +533,7 @@ func (in *Input) ProcessTestData(data map[string]interface{}) {
 
 	// Add input ID to message data - same as production logic
 	if data == nil {
-		data = make(map[string]interface{})
+		data = make(map[string]interface{}, 2)
 	}
 	data["_hub_input"] = in.Id
 

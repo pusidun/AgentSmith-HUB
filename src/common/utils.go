@@ -117,7 +117,7 @@ func MapDeepCopy(m map[string]interface{}) map[string]interface{} {
 func MapDeepCopyAction(m interface{}) interface{} {
 	vm, ok := m.(map[string]interface{})
 	if ok {
-		cp := map[string]interface{}{}
+		cp := make(map[string]interface{}, len(vm))
 		for k, v := range vm {
 			vm, ok := v.(map[string]interface{})
 			if ok {
@@ -135,7 +135,7 @@ func MapDeepCopyAction(m interface{}) interface{} {
 	} else {
 		vm, ok := m.([]interface{})
 		if ok {
-			cp := []interface{}{}
+			cp := make([]interface{}, 0, len(vm))
 			for _, v := range vm {
 				cp = append(cp, MapDeepCopyAction(v))
 			}

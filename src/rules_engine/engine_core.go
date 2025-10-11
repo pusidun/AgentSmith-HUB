@@ -427,14 +427,25 @@ func (r *Ruleset) EngineCheck(data map[string]interface{}) []map[string]interfac
 
 		// Create data copy for this rule execution
 		var dataCopy map[string]interface{}
+		appendCount := len(rule.AppendsMap)
+
 		if r.IsDetection {
 			// For detection rules, always use deep copy to avoid rule interference
 			// This prevents multiple rules from accumulating hit rule IDs on the same data reference
-			dataCopy = common.MapDeepCopy(data)
-		} else if r.ruleModifiesData(rule) {
-			dataCopy = common.MapDeepCopy(data)
+			// Reserve extra capacity for hit_rule_id (1) + actual append count
+			dataCopy = mapDeepCopyWithExtraCapacity(data, 1+appendCount)
 		} else {
-			dataCopy = data // Use original data if rule doesn't modify it
+			// For exclude rules, check if rule modifies data
+			if appendCount > 0 {
+				// Has append operations, reserve extra capacity
+				dataCopy = mapDeepCopyWithExtraCapacity(data, appendCount)
+			} else if len(rule.ModifyMap) > 0 || len(rule.DelMap) > 0 || len(rule.PluginMap) > 0 {
+				// Has modify/del/plugin but no append, use standard deep copy
+				dataCopy = common.MapDeepCopy(data)
+			} else {
+				// No modifications at all, use original data
+				dataCopy = data
+			}
 		}
 
 		// Execute all operations in the order specified by the Queue
@@ -1180,6 +1191,23 @@ func checkNodeLogic(checkNode *CheckNodes, data map[string]interface{}, checkNod
 	return checkListFlag
 }
 
+// mapDeepCopyWithExtraCapacity performs a deep copy with additional capacity for rule operations
+// extraCap: additional capacity for fields that will be added (hit_rule_id, append)
+// This function only adds extra capacity at the top level; nested structures use standard deep copy
+func mapDeepCopyWithExtraCapacity(m map[string]interface{}, extraCap int) map[string]interface{} {
+	if m == nil {
+		return nil
+	}
+
+	result := make(map[string]interface{}, len(m)+extraCap)
+	for k, v := range m {
+		// Use common.MapDeepCopyAction for recursive deep copy of all nested structures
+		// This ensures correct handling of nested maps, slices, and any combination
+		result[k] = common.MapDeepCopyAction(v)
+	}
+	return result
+}
+
 // addHitRuleID appends the hit rule ID to the data map.
 func addHitRuleID(data map[string]interface{}, ruleID string) {
 	// data is guaranteed to be non-nil when called from EngineCheck
@@ -1229,21 +1257,6 @@ func (r *Ruleset) GetIncrementAndUpdate() uint64 {
 	}
 
 	return 0
-}
-
-// ruleModifiesData checks if a rule contains operations that modify the input data
-func (r *Ruleset) ruleModifiesData(rule *Rule) bool {
-	if rule.Queue == nil {
-		return false
-	}
-
-	for _, op := range *rule.Queue {
-		switch op.Type {
-		case T_Append, T_Del, T_Plugin, T_Modify:
-			return true // These operations modify data
-		}
-	}
-	return false
 }
 
 // GetRunningTaskCount returns the number of currently running tasks in the thread pool

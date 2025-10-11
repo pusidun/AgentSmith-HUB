@@ -2104,7 +2104,7 @@ func extractKeysFromMap(data map[string]interface{}, prefix string, fieldSet map
 			// Only parse as URL query string if it looks like one (contains = and &)
 			if strings.Contains(v, "=") && (strings.Contains(v, "&") || strings.Count(v, "=") == 1) {
 				if parsed, err := url.ParseQuery(v); err == nil && len(parsed) > 0 {
-					queryMap := make(map[string]interface{})
+					queryMap := make(map[string]interface{}, len(parsed))
 					for qKey, qValues := range parsed {
 						queryMap[qKey] = strings.Join(qValues, "")
 					}
@@ -2838,7 +2838,7 @@ func GetBatchPluginParameters(c echo.Context) error {
 
 	// Parse comma-separated IDs
 	ids := strings.Split(idsParam, ",")
-	result := make(map[string]interface{})
+	result := make(map[string]interface{}, len(ids))
 
 	for _, id := range ids {
 		id = strings.TrimSpace(id)
@@ -2882,7 +2882,7 @@ func GetBatchRulesetFields(c echo.Context) error {
 
 	// Parse comma-separated IDs
 	ids := strings.Split(idsParam, ",")
-	result := make(map[string]interface{})
+	result := make(map[string]interface{}, len(ids))
 
 	for _, id := range ids {
 		id = strings.TrimSpace(id)
