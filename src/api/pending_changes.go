@@ -1021,10 +1021,21 @@ func ApplySingleChange(c echo.Context) error {
 			for _, id := range affectedProjects {
 				// Use safe accessor without additional locking
 				if p, ok := project.GetProject(id); ok {
-					// Restart and record the operation
-					err := p.Restart(true, "change_push")
+					// Check user intention - only restart if user wants it running
+					userWantsRunning, err := common.GetProjectUserIntention(id)
 					if err != nil {
-						logger.Error("Failed to restart project after single change apply", "project_id", id, "error", err)
+						logger.Warn("Failed to get user intention for project, defaulting to restart", "project_id", id, "error", err)
+						userWantsRunning = true // Default to restart on error for backward compatibility
+					}
+
+					if userWantsRunning {
+						// Restart and record the operation
+						err := p.Restart(true, "change_push")
+						if err != nil {
+							logger.Error("Failed to restart project after single change apply", "project_id", id, "error", err)
+						}
+					} else {
+						logger.Info("Project user intention is stopped, skipping restart after config change", "project_id", id)
 					}
 				}
 			}
@@ -1112,10 +1123,21 @@ func ApplyAllChanges(c echo.Context) error {
 			for _, id := range projectsToRestart {
 				// Use safe accessor without additional locking
 				if p, ok := project.GetProject(id); ok {
-					// Restart and record the operation
-					err := p.Restart(true, "batch_change_push")
+					// Check user intention - only restart if user wants it running
+					userWantsRunning, err := common.GetProjectUserIntention(id)
 					if err != nil {
-						logger.Error("Failed to restart project after batch change apply", "project_id", id, "error", err)
+						logger.Warn("Failed to get user intention for project, defaulting to restart", "project_id", id, "error", err)
+						userWantsRunning = true // Default to restart on error for backward compatibility
+					}
+
+					if userWantsRunning {
+						// Restart and record the operation
+						err := p.Restart(true, "batch_change_push")
+						if err != nil {
+							logger.Error("Failed to restart project after batch change apply", "project_id", id, "error", err)
+						}
+					} else {
+						logger.Info("Project user intention is stopped, skipping restart after config change", "project_id", id)
 					}
 				}
 			}
