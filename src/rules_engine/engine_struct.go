@@ -2194,7 +2194,8 @@ func parseValue(s string) (*PluginArg, error) {
 
 	// Support field references - any unquoted identifier is treated as field reference
 	// Supports both simple names (field) and nested paths (parent.child)
-	if matched, _ := regexpgo.MatchString(`^[a-zA-Z_][a-zA-Z0-9_.]*$`, s); matched {
+	// Also supports escaped characters with backslash (e.g., conn.id\.resp_h)
+	if matched, _ := regexpgo.MatchString(`^[a-zA-Z_][a-zA-Z0-9_.\\]*$`, s); matched {
 		res.Value = s
 		res.Type = 1
 		return &res, nil
