@@ -843,14 +843,14 @@ func parseDel(element xml.StartElement, decoder *XMLDecoder, elementLine int) ([
 				return delFields, fmt.Errorf("del content cannot be empty at line %d", elementLine)
 			}
 
-			fields := strings.Split(content, ",")
-			for _, field := range fields {
-				field = strings.TrimSpace(field)
-				if field != "" {
-					fieldPath := strings.Split(field, ".")
-					delFields = append(delFields, fieldPath)
-				}
+		fields := strings.Split(content, ",")
+		for _, field := range fields {
+			field = strings.TrimSpace(field)
+			if field != "" {
+				fieldPath := common.StringToList(field)
+				delFields = append(delFields, fieldPath)
 			}
+		}
 		case xml.EndElement:
 			if t.Name.Local == "del" {
 				if len(delFields) == 0 {
