@@ -371,8 +371,8 @@ async function applySingleChange(change) {
   applying.value = true
   
   try {
-    // Call apply API
-    await hubApi.applySingleChange(change.type, change.id)
+    // Call apply API - backend will return projects_to_restart
+    const result = await hubApi.applySingleChange(change.type, change.id)
     
     $message?.success?.(`Change applied successfully for ${getComponentTypeLabel(change.type)} "${change.id}"`)
     
@@ -380,6 +380,30 @@ async function applySingleChange(change) {
     dataCache.clearCache('pendingChanges')
     // Also clear the affected component type cache for immediate UI update
     dataCache.clearComponentCache(change.type)
+    
+    // Handle project restarts (for any component type change that affects projects)
+    const projectsToRestart = result?.projects_to_restart || []
+    if (projectsToRestart.length > 0) {
+      // Update UI immediately to show stopping status for all affected projects
+      const currentProjects = await dataCache.fetchComponents('projects', true)
+      const updatedProjects = currentProjects.map(project => {
+        if (projectsToRestart.includes(project.id)) {
+          return { ...project, status: 'stopping' }
+        }
+        return project
+      })
+      dataCache.updateComponentCache('projects', updatedProjects)
+      emit('refresh-list', 'projects')
+      
+      if (projectsToRestart.length === 1) {
+        $message?.info?.(`Project "${projectsToRestart[0]}" is restarting...`)
+      } else {
+        $message?.info?.(`${projectsToRestart.length} projects are restarting...`)
+      }
+      
+      // Start accelerated polling for all affected projects
+      startAcceleratedProjectPolling(projectsToRestart)
+    }
     
     // Force refresh all component lists to ensure hasTemp is updated
     await Promise.all([

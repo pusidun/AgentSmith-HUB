@@ -1015,27 +1015,34 @@ func ApplySingleChange(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to apply change: " + err.Error()})
 	}
 
+	// Track projects that will actually be restarted
+	projectsToRestart := []string{}
+	
 	if len(affectedProjects) > 0 {
 		logger.Info("Restarting affected projects asynchronously", "count", len(affectedProjects))
+		
+		// First, check which projects will actually be restarted (based on user intention)
+		for _, id := range affectedProjects {
+			if _, ok := project.GetProject(id); ok {
+				userWantsRunning, err := common.GetProjectUserIntention(id)
+				if err != nil {
+					logger.Warn("Failed to get user intention for project, defaulting to restart", "project_id", id, "error", err)
+					userWantsRunning = true // Default to restart on error for backward compatibility
+				}
+				
+				if userWantsRunning {
+					projectsToRestart = append(projectsToRestart, id)
+				}
+			}
+		}
+		
+		// Then restart them asynchronously
 		go func() {
-			for _, id := range affectedProjects {
-				// Use safe accessor without additional locking
+			for _, id := range projectsToRestart {
 				if p, ok := project.GetProject(id); ok {
-					// Check user intention - only restart if user wants it running
-					userWantsRunning, err := common.GetProjectUserIntention(id)
+					err := p.Restart(true, "change_push")
 					if err != nil {
-						logger.Warn("Failed to get user intention for project, defaulting to restart", "project_id", id, "error", err)
-						userWantsRunning = true // Default to restart on error for backward compatibility
-					}
-
-					if userWantsRunning {
-						// Restart and record the operation
-						err := p.Restart(true, "change_push")
-						if err != nil {
-							logger.Error("Failed to restart project after single change apply", "project_id", id, "error", err)
-						}
-					} else {
-						logger.Info("Project user intention is stopped, skipping restart after config change", "project_id", id)
+						logger.Error("Failed to restart project after single change apply", "project_id", id, "error", err)
 					}
 				}
 			}
@@ -1043,11 +1050,14 @@ func ApplySingleChange(c echo.Context) error {
 
 		return c.JSON(http.StatusOK, map[string]interface{}{
 			"message":            "Change applied successfully, projects are restarting asynchronously",
-			"restarted_projects": len(affectedProjects),
+			"projects_to_restart": projectsToRestart,
 		})
 	}
 
-	return c.JSON(http.StatusOK, map[string]string{"message": "Change applied successfully"})
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"message": "Change applied successfully",
+		"projects_to_restart": []string{},
+	})
 }
 
 // ApplyAllChanges applies all pending changes and returns affected projects
