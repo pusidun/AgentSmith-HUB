@@ -2926,7 +2926,7 @@ async function pollProjectStatusUntilStable(projectId, expectedTransitionState) 
           }
 
           // Stable states we wait for
-          const stableStates = ['running', 'stopped', 'error', 'failed']
+          const stableStates = ['running', 'stopped', 'error']
           if (stableStates.includes(project.status)) {
             activeProjectPollers.delete(projectId)
             isPollingProject.value = activeProjectPollers.size > 0
