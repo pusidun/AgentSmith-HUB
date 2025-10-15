@@ -592,7 +592,7 @@ function startAcceleratedProjectPolling(projectIds) {
   
   const pollInterval = 1000 // Poll every 1 second for faster updates
   const maxPollTime = 60000 // Stop polling after 60 seconds (to cover retry delays)
-  const errorGracePeriod = 10000 // Continue polling for 10s after seeing error (for backend retry)
+  const errorGracePeriod = 40000 // Continue polling for 40s after seeing error (backend retry can take up to 35s)
   const startTime = Date.now()
   const projectErrorTime = {} // Track when each project first enters error state
   

@@ -1076,6 +1076,8 @@ func (p *Project) Restart(recordOperation bool, triggeredBy string) (err error) 
 			err = fmt.Errorf("failed to stop project during restart: %w", stopErr)
 			return err
 		}
+
+		time.Sleep(10 * time.Second)
 	}
 
 	// Start the project again with retry mechanism

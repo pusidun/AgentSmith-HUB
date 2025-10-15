@@ -2904,7 +2904,7 @@ async function pollProjectStatusUntilStable(projectId, expectedTransitionState) 
 
   const maxAttempts = 240 // 2 minutes (240 * 500ms = 120 seconds)
   const pollInterval = REFRESH_INTERVALS.POLLING_INTERVAL
-  const errorGraceAttempts = 20 // Continue polling for 10s (20 * 500ms) after seeing error
+  const errorGraceAttempts = 80 // Continue polling for 40s (80 * 500ms) after seeing error (backend retry can take up to 35s)
   let attempts = 0
   let errorFirstSeen = null
 
