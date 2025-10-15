@@ -591,8 +591,8 @@ function startAcceleratedProjectPolling(projectIds) {
   if (!projectIds || projectIds.length === 0) return
   
   const pollInterval = 1000 // Poll every 1 second for faster updates
-  const maxPollTime = 60000 // Stop polling after 60 seconds (to cover retry delays)
-  const errorGracePeriod = 40000 // Continue polling for 40s after seeing error (backend retry can take up to 35s)
+  const maxPollTime = 90000 // Stop polling after 90 seconds
+  const errorGracePeriod = 60000 // Continue polling for 60s (backend can take up to ~50s: 2s stop + 4 retries with delays)
   const startTime = Date.now()
   const projectErrorTime = {} // Track when each project first enters error state
   
@@ -609,28 +609,29 @@ function startAcceleratedProjectPolling(projectIds) {
       // Fetch latest project data
       const projects = await dataCache.fetchComponents('projects', true)
       
-      // Check if any projects are still in transition or transient error
+      // Check if any projects are still in transition or transient error/stopped
       const stillTransitioning = projectIds.some(projectId => {
         const project = projects.find(p => p.id === projectId)
         if (!project) return false
         
-        // Track error state timing for each project
-        if (project.status === 'error') {
+        // Track error/stopped state timing for each project
+        if (project.status === 'error' || project.status === 'stopped') {
           if (!projectErrorTime[projectId]) {
             projectErrorTime[projectId] = Date.now()
-            console.log(`Project ${projectId} entered error state, will continue polling for ${errorGracePeriod / 1000}s (backend might be retrying)`)
+            console.log(`Project ${projectId} entered ${project.status} state, will continue polling for ${errorGracePeriod / 1000}s (backend might be restarting)`)
           }
-          // Check if error has persisted beyond grace period
-          const errorDuration = Date.now() - projectErrorTime[projectId]
-          if (errorDuration > errorGracePeriod) {
-            console.log(`Project ${projectId} error persisted for ${errorDuration / 1000}s, treating as stable error`)
+          // Check if state has persisted beyond grace period
+          const stateDuration = Date.now() - projectErrorTime[projectId]
+          if (stateDuration > errorGracePeriod) {
+            console.log(`Project ${projectId} ${project.status} persisted for ${stateDuration / 1000}s, treating as stable`)
+            delete projectErrorTime[projectId]
             return false // Stop polling this project
           }
           return true // Continue polling during grace period
         } else {
-          // Clear error time if status changed (recovered from error)
+          // Clear timer if status changed (recovered from error/stopped)
           if (projectErrorTime[projectId]) {
-            console.log(`Project ${projectId} recovered from error to ${project.status}`)
+            console.log(`Project ${projectId} recovered from transient state to ${project.status}`)
             delete projectErrorTime[projectId]
           }
         }

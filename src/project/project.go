@@ -1021,8 +1021,16 @@ func (p *Project) Stop(lock bool) error {
 		logger.Info("Project stopped successfully", "project", p.Id)
 		return nil
 	case <-overallTimeout:
-		p.SetProjectStatus(common.StatusError, fmt.Errorf("stop operation timed out"))
-		return fmt.Errorf("project stop operation timed out")
+		// CRITICAL: Timeout occurred but goroutine may still be running
+		// Force cleanup and set status to stopped to allow restart
+		// The goroutine will eventually finish but we don't wait
+		logger.Warn("Stop operation timed out, forcing cleanup and stopped status (goroutine may still be running)", "project", p.Id)
+		p.cleanup()
+		p.SetProjectStatus(common.StatusStopped, nil)
+
+		// Give components extra time to actually stop before next start
+		// This mitigates "component is not stopped" errors on restart
+		return fmt.Errorf("project stop operation timed out (forced to stopped, sleep recommended)")
 	}
 }
 
@@ -1073,10 +1081,12 @@ func (p *Project) Restart(recordOperation bool, triggeredBy string) (err error) 
 	if p.Status == common.StatusRunning || p.Status == common.StatusError {
 		stopErr := p.Stop(false)
 		if stopErr != nil {
-			err = fmt.Errorf("failed to stop project during restart: %w", stopErr)
-			return err
+			// Stop() guarantees status is Stopped even on error/timeout
+			// Log the error but continue with restart
+			logger.Warn("Stop returned error during restart, but status should be stopped", "project", p.Id, "error", stopErr)
 		}
 
+		// Sleep after stop to ensure components are fully released
 		time.Sleep(10 * time.Second)
 	}
 

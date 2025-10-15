@@ -2904,7 +2904,7 @@ async function pollProjectStatusUntilStable(projectId, expectedTransitionState) 
 
   const maxAttempts = 240 // 2 minutes (240 * 500ms = 120 seconds)
   const pollInterval = REFRESH_INTERVALS.POLLING_INTERVAL
-  const errorGraceAttempts = 80 // Continue polling for 40s (80 * 500ms) after seeing error (backend retry can take up to 35s)
+  const errorGraceAttempts = 120 // Continue polling for 60s (120 * 500ms) after seeing error (backend can take up to ~50s)
   let attempts = 0
   let errorFirstSeen = null
 
@@ -2927,16 +2927,16 @@ async function pollProjectStatusUntilStable(projectId, expectedTransitionState) 
             }
           }
 
-          // Track error state timing
-          if (project.status === 'error') {
+          // Track error/stopped state timing (both can be transient during restart)
+          if (project.status === 'error' || project.status === 'stopped') {
             if (!errorFirstSeen) {
               errorFirstSeen = attempts
-              console.log(`Project ${projectId} entered error state at attempt ${attempts}, will continue polling for ${errorGraceAttempts} more attempts (backend might be retrying)`)
+              console.log(`Project ${projectId} entered ${project.status} state at attempt ${attempts}, will continue polling for ${errorGraceAttempts} more attempts (backend might be restarting)`)
             }
-            // Check if error has persisted beyond grace period
-            const errorDuration = attempts - errorFirstSeen
-            if (errorDuration >= errorGraceAttempts) {
-              console.log(`Project ${projectId} error persisted for ${errorDuration} attempts, treating as stable error`)
+            // Check if state has persisted beyond grace period
+            const stateDuration = attempts - errorFirstSeen
+            if (stateDuration >= errorGraceAttempts) {
+              console.log(`Project ${projectId} ${project.status} persisted for ${stateDuration} attempts, treating as stable`)
               activeProjectPollers.delete(projectId)
               isPollingProject.value = activeProjectPollers.size > 0
               return
@@ -2950,14 +2950,14 @@ async function pollProjectStatusUntilStable(projectId, expectedTransitionState) 
             }
             return
           } else if (errorFirstSeen) {
-            // Recovered from error
-            console.log(`Project ${projectId} recovered from error to ${project.status}`)
+            // Recovered from transient state
+            console.log(`Project ${projectId} recovered from transient state to ${project.status}`)
             errorFirstSeen = null
           }
 
-          // Check for other stable states
-          const stableStates = ['running', 'stopped']
-          if (stableStates.includes(project.status)) {
+          // Check for truly stable state (running)
+          // Note: error and stopped are handled above with grace period
+          if (project.status === 'running') {
             activeProjectPollers.delete(projectId)
             isPollingProject.value = activeProjectPollers.size > 0
             return

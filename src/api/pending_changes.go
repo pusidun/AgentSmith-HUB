@@ -857,18 +857,17 @@ func reloadComponentUnified(req *ComponentReloadRequest) ([]string, error) {
 		affectedProjects = project.GetAffectedProjects("ruleset", req.ID)
 
 	case "project":
-		// Save old project status before creating new instance
+		// CRITICAL: Stop old project first to release components
+		// Without this, new project's Start() will fail with "component is not stopped"
 		oldProject, oldExists := project.GetProject(req.ID)
-		wasRunning := oldExists && oldProject.Status == common.StatusRunning
-
-		// If old project exists and is running, stop it first to release components
-		// This prevents "component is not stopped" errors when creating new project instance
 		if oldExists && (oldProject.Status == common.StatusRunning || oldProject.Status == common.StatusError) {
-			logger.Info("Stopping old project before creating new instance", "project", req.ID)
+			logger.Info("Stopping old project before reload to release components", "project", req.ID)
 			stopErr := oldProject.Stop(false)
 			if stopErr != nil {
 				logger.Warn("Failed to stop old project, continuing anyway", "project", req.ID, "error", stopErr)
 			}
+			// Sleep to ensure components fully stopped
+			time.Sleep(2 * time.Second)
 		}
 
 		// Create new component instance
@@ -881,11 +880,6 @@ func reloadComponentUnified(req *ComponentReloadRequest) ([]string, error) {
 		}
 		if err != nil {
 			return nil, fmt.Errorf("failed to create project: %w", err)
-		}
-
-		// If old project was running, set new project to stopping for smooth UI transition
-		if wasRunning {
-			newProject.SetProjectStatus(common.StatusStopping, nil)
 		}
 
 		// Replace in global registry using safe accessors
