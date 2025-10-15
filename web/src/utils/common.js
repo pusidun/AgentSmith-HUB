@@ -134,7 +134,7 @@ export function getStatusLabel(status) {
   const mapping = {
     running: 'R',
     stopped: 'S',
-    starting: '◐',  // Use half-circle symbol for starting
+    starting: '●',  // Use dot symbol for starting
     stopping: '●',  // Use dot symbol for stopping
     error: 'E'
   }

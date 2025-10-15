@@ -516,10 +516,7 @@ export const hubApi = {
           await this.applySingleChange('projects', id);
         } catch (applyError) {
           console.error(`Failed to apply changes for project ${id} before restarting:`, applyError);
-          return {
-            success: false,
-            error: `Failed to apply changes before restarting: ${applyError.message}`
-          };
+          throw new Error(`Failed to apply changes before restarting: ${applyError.message}`);
         }
       }
       
@@ -528,10 +525,7 @@ export const hubApi = {
       return response.data;
     } catch (error) {
       console.error(`Error restarting project ${id}:`, error);
-      return {
-        success: false,
-        error: error.response?.data?.error || error.message || 'Unknown error'
-      };
+      throw error;
     }
   },
   

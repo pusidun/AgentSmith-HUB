@@ -80,7 +80,14 @@ func StartProject(c echo.Context) error {
 	// Record successful operation
 	RecordProjectOperation(OpTypeProjectStart, req.ProjectID, "success", "", nil)
 
-	return c.JSON(http.StatusOK, map[string]string{"message": "Project started successfully"})
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"status":  "success",
+		"message": "Project started successfully",
+		"project": map[string]interface{}{
+			"id":     p.Id,
+			"status": p.Status,
+		},
+	})
 }
 
 func StopProject(c echo.Context) error {

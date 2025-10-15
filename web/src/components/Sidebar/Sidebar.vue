@@ -2779,33 +2779,15 @@ async function startProject(item) {
   
   try {
     // Step 2: Call API (this may take time, but UI already shows feedback)
-    const result = await hubApi.startProject(item.id)
+    await hubApi.startProject(item.id)
     
-    if (result.warning) {
-      // If there are warnings (e.g., temporary files exist), show warning modal
-      projectWarningMessage.value = result.message
-      projectOperationItem.value = item
-      projectOperationType.value = 'start'
-      showProjectWarningModal.value = true
-      activeModal.value = 'projectWarning'
-      addEscKeyListener()
-      
-      // Reset UI state since user needs to confirm
-      if (item && items.projects) {
-        const projectItem = items.projects.find(p => p.id === item.id)
-        if (projectItem) {
-          projectItem.status = 'stopped'
-        }
-      }
-    } else {
-      // Step 3: API succeeded, start polling for real status
-      $message?.success?.('Project start command sent successfully')
-      
-      // Clear all cache since project start affects multiple data types
-      dataCache.clearAll()
-      
-      pollProjectStatusUntilStable(item.id, 'starting')
-    }
+    // Step 3: API succeeded, start polling for real status
+    $message?.success?.('Project start command sent successfully')
+    
+    // Clear all cache since project start affects multiple data types
+    dataCache.clearAll()
+    
+    pollProjectStatusUntilStable(item.id, 'starting')
   } catch (error) {
     // Step 4: API failed, reset UI state and show error
     console.error('Start project API failed:', error)
@@ -2841,7 +2823,7 @@ async function stopProject(item) {
   
   try {
     // Step 2: Call API
-    const result = await hubApi.stopProject(item.id)
+    await hubApi.stopProject(item.id)
     
     // Step 3: API succeeded, start polling for real status
     $message?.success?.('Project stop command sent successfully')
@@ -2885,36 +2867,16 @@ async function restartProject(item) {
   
   try {
     // Step 2: Call API
-    const result = await hubApi.restartProject(item.id)
+    await hubApi.restartProject(item.id)
     
-    if (result.warning) {
-      // If there are warnings, show warning modal
-      projectWarningMessage.value = result.message
-      projectOperationItem.value = item
-      projectOperationType.value = 'restart'
-      showProjectWarningModal.value = true
-      activeModal.value = 'projectWarning'
-      addEscKeyListener()
-      
-      // Reset UI state since user needs to confirm
-      if (item && items.projects) {
-        const projectItem = items.projects.find(p => p.id === item.id)
-        if (projectItem) {
-          projectItem.status = 'running' // Reset to original state
-        }
-      }
-    } else {
-      // Step 3: API succeeded, start polling for real status
-      $message?.success?.('Project restart command sent successfully')
-      
-      // Clear all cache since project restart affects multiple data types
-      setTimeout(() => {
-        dataCache.clearAll(`project restart: ${item.id}`)
-      }, 2000)
-      
-      // For restart, we expect: stopping -> starting -> running
-      pollProjectStatusUntilStable(item.id, 'stopping')
-    }
+    // Step 3: API succeeded, start polling for real status
+    $message?.success?.('Project restart command sent successfully')
+    
+    // Clear all cache since project restart affects multiple data types
+    dataCache.clearAll()
+    
+    // For restart, we expect: stopping -> starting -> running
+    pollProjectStatusUntilStable(item.id, 'stopping')
   } catch (error) {
     // Step 4: API failed, reset UI state and show error
     console.error('Restart project API failed:', error)
@@ -2940,7 +2902,7 @@ async function pollProjectStatusUntilStable(projectId, expectedTransitionState) 
   activeProjectPollers.set(projectId, true)
   isPollingProject.value = true
 
-  const maxAttempts = 60 // 2 minutes
+  const maxAttempts = 240 // 2 minutes (240 * 500ms = 120 seconds)
   const pollInterval = REFRESH_INTERVALS.POLLING_INTERVAL
   let attempts = 0
 
@@ -3049,28 +3011,21 @@ async function continueProjectOperation() {
   projectOperationLoading.value = true
   
   try {
-    let result
-    
     // Step 2: Perform operations on the original project
     if (operationType === 'start') {
       // Start using original project ID
-      const response = await hubApi.startProject(item.id)
-      result = { success: true, data: response.data }
+      await hubApi.startProject(item.id)
     } else if (operationType === 'stop') {
       // Stop using original project ID
-      const response = await hubApi.stopProject(item.id)
-      result = { success: true, data: response.data }
+      await hubApi.stopProject(item.id)
     } else if (operationType === 'restart') {
       // Restart using original project ID
-      const response = await hubApi.restartProject(item.id)
-      result = { success: true, data: response.data }
+      await hubApi.restartProject(item.id)
     }
     
-    if (result && result.success) {
-      // Step 3: API succeeded, start polling for real status
-      $message?.success?.(`Project ${operationType} command sent successfully`)
-      pollProjectStatusUntilStable(item.id, operationType === 'start' ? 'starting' : 'stopping')
-    }
+    // Step 3: API succeeded, start polling for real status
+    $message?.success?.(`Project ${operationType} command sent successfully`)
+    pollProjectStatusUntilStable(item.id, operationType === 'start' ? 'starting' : 'stopping')
   } catch (error) {
     // Step 4: API failed, reset UI state and show error
     console.error(`${operationType} project API failed:`, error)

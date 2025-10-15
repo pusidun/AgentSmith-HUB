@@ -1298,26 +1298,16 @@ async function startProject() {
   projectOperationLoading.value = true
   
   try {
-    const result = await hubApi.startProject(props.item.id)
+    await hubApi.startProject(props.item.id)
     
-    if (result.warning) {
-      // 如果有警告（例如存在临时文件），显示警告模态框
-      projectWarningMessage.value = result.message
-      projectOperationType.value = 'start'
-      projectWarningModal.value = true
-    } else if (result.success) {
-      // 成功启动项目
-      $message?.success?.('Project started successfully')
-      
-      // Clear all cache since project start affects multiple data types
-      dataCache.clearAll()
-      
-      // 不要立即修改状态，让刷新机制去更新状态确保同步
-      // 操作后会触发快速刷新来获取真实状态
-    } else if (result.error) {
-      // 启动失败
-      $message?.error?.('Failed to start project: ' + result.error)
-    }
+    // 成功启动项目
+    $message?.success?.('Project started successfully')
+    
+    // Clear all cache since project start affects multiple data types
+    dataCache.clearAll()
+    
+    // 不要立即修改状态，让刷新机制去更新状态确保同步
+    // 操作后会触发快速刷新来获取真实状态
   } catch (error) {
     $message?.error?.('Error starting project: ' + (error.message || 'Unknown error'))
   } finally {
@@ -1342,26 +1332,16 @@ async function stopProject() {
   projectOperationLoading.value = true
   
   try {
-    const result = await hubApi.stopProject(props.item.id)
+    await hubApi.stopProject(props.item.id)
     
-    if (result.warning) {
-      // 如果有警告（例如存在临时文件），显示警告模态框
-      projectWarningMessage.value = result.message
-      projectOperationType.value = 'stop'
-      projectWarningModal.value = true
-    } else if (result.success) {
-      // 成功停止项目
-      $message?.success?.('Project stopped successfully')
-      
-      // Clear all cache since project stop affects multiple data types
-      dataCache.clearAll()
-      
-      // 不要立即修改状态，让刷新机制去更新状态确保同步
-      // 操作后会触发快速刷新来获取真实状态
-    } else if (result.error) {
-      // 停止失败
-      $message?.error?.('Failed to stop project: ' + result.error)
-    }
+    // 成功停止项目
+    $message?.success?.('Project stopped successfully')
+    
+    // Clear all cache since project stop affects multiple data types
+    dataCache.clearAll()
+    
+    // 不要立即修改状态，让刷新机制去更新状态确保同步
+    // 操作后会触发快速刷新来获取真实状态
   } catch (error) {
     $message?.error?.('Error stopping project: ' + (error.message || 'Unknown error'))
   } finally {
@@ -1386,26 +1366,16 @@ async function restartProject() {
   projectOperationLoading.value = true
   
   try {
-    const result = await hubApi.restartProject(props.item.id)
+    await hubApi.restartProject(props.item.id)
     
-    if (result.warning) {
-      // 如果有警告（例如存在临时文件），显示警告模态框
-      projectWarningMessage.value = result.message
-      projectOperationType.value = 'restart'
-      projectWarningModal.value = true
-    } else if (result.success) {
-      // 成功重启项目
-      $message?.success?.('Project restarted successfully')
-      
-      // Clear all cache since project restart affects multiple data types
-      dataCache.clearAll()
-      
-      // 不要立即修改状态，让刷新机制去更新状态确保同步
-      // 操作后会触发快速刷新来获取真实状态
-    } else if (result.error) {
-      // 重启失败
-      $message?.error?.('Failed to restart project: ' + result.error)
-    }
+    // 成功重启项目
+    $message?.success?.('Project restarted successfully')
+    
+    // Clear all cache since project restart affects multiple data types
+    dataCache.clearAll()
+    
+    // 不要立即修改状态，让刷新机制去更新状态确保同步
+    // 操作后会触发快速刷新来获取真实状态
   } catch (error) {
     $message?.error?.('Error restarting project: ' + (error.message || 'Unknown error'))
   } finally {
@@ -1431,13 +1401,9 @@ function continueProjectOperation() {
     if (projectOperationType.value === 'start') {
       // 直接调用API启动项目
       hubApi.startProject(id)
-        .then(result => {
-          if (result.success) {
-            $message?.success?.('Project started successfully')
-            // 不要立即修改状态，让刷新机制去更新状态确保同步
-          } else if (result.error) {
-            $message?.error?.('Failed to start project: ' + result.error)
-          }
+        .then(() => {
+          $message?.success?.('Project started successfully')
+          // 不要立即修改状态，让刷新机制去更新状态确保同步
         })
         .catch(error => {
           $message?.error?.('Failed to start project: ' + (error.message || 'Unknown error'))
@@ -1448,13 +1414,9 @@ function continueProjectOperation() {
     } else if (projectOperationType.value === 'stop') {
       // 直接调用API停止项目
       hubApi.stopProject(id)
-        .then(result => {
-          if (result.success) {
-            $message?.success?.('Project stopped successfully')
-            // 不要立即修改状态，让刷新机制去更新状态确保同步
-          } else if (result.error) {
-            $message?.error?.('Failed to stop project: ' + result.error)
-          }
+        .then(() => {
+          $message?.success?.('Project stopped successfully')
+          // 不要立即修改状态，让刷新机制去更新状态确保同步
         })
         .catch(error => {
           $message?.error?.('Failed to stop project: ' + (error.message || 'Unknown error'))
@@ -1465,13 +1427,9 @@ function continueProjectOperation() {
     } else if (projectOperationType.value === 'restart') {
       // 先停止，再启动
       hubApi.restartProject(id)
-        .then(result => {
-          if (result.success) {
-            $message?.success?.('Project restarted successfully')
-            // 不要立即修改状态，让刷新机制去更新状态确保同步
-          } else if (result.error) {
-            $message?.error?.('Failed to restart project: ' + result.error)
-          }
+        .then(() => {
+          $message?.success?.('Project restarted successfully')
+          // 不要立即修改状态，让刷新机制去更新状态确保同步
         })
         .catch(error => {
           $message?.error?.('Failed to restart project: ' + (error.message || 'Unknown error'))
