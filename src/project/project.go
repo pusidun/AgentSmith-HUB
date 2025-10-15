@@ -1101,15 +1101,12 @@ func (p *Project) startWithRetry(recordOperation bool) error {
 		err := p.Start(recordOperation)
 		if err != nil {
 			if attempt == maxRetries {
-				// Only set error status when all retries are exhausted
 				logger.Error("Failed to start project after all retry attempts", "project", p.Id, "final_error", err)
 				p.SetProjectStatus(common.StatusError, fmt.Errorf("failed to start project after %d attempts: %w", maxRetries+1, err))
 				return fmt.Errorf("failed to start project after %d attempts: %w", maxRetries+1, err)
 			}
 
-			// On retry, keep status as starting instead of error
 			logger.Warn("Project start failed, will retry", "project", p.Id, "attempt", attempt+1, "error", err, "retry_delay", retryDelays[attempt])
-			p.SetProjectStatus(common.StatusStarting, nil)
 			time.Sleep(retryDelays[attempt])
 			continue
 		}
@@ -1122,7 +1119,6 @@ func (p *Project) startWithRetry(recordOperation bool) error {
 
 		// Some components are not running, retry if we have attempts left
 		if attempt == maxRetries {
-			// Only set error status when all retries are exhausted
 			err := fmt.Errorf("project started but some components are not in running state after %d attempts", maxRetries+1)
 			p.SetProjectStatus(common.StatusError, err)
 			return err
@@ -1130,9 +1126,8 @@ func (p *Project) startWithRetry(recordOperation bool) error {
 
 		logger.Warn("Project started but some components are not running, will retry", "project", p.Id, "attempt", attempt+1, "retry_delay", retryDelays[attempt])
 
-		// Stop the project before retrying, and keep status as starting
+		// Stop the project before retrying
 		_ = p.Stop(false)
-		p.SetProjectStatus(common.StatusStarting, nil)
 		time.Sleep(retryDelays[attempt])
 	}
 

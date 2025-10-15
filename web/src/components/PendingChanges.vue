@@ -591,16 +591,14 @@ function startAcceleratedProjectPolling(projectIds) {
   if (!projectIds || projectIds.length === 0) return
   
   const pollInterval = 1000 // Poll every 1 second for faster updates
-  const maxPollTime = 60000 // Stop polling after 60 seconds (to cover retry delays)
+  const maxPollTime = 30000 // Stop polling after 30 seconds
   const startTime = Date.now()
   
   const poll = async () => {
     try {
-      const elapsedTime = Date.now() - startTime
-      
       // Check if we've exceeded max poll time
-      if (elapsedTime > maxPollTime) {
-        console.log('Accelerated project polling timeout after', maxPollTime / 1000, 'seconds')
+      if (Date.now() - startTime > maxPollTime) {
+        console.log('Accelerated project polling timeout')
         return
       }
       
@@ -620,19 +618,17 @@ function startAcceleratedProjectPolling(projectIds) {
       if (stillTransitioning) {
         setTimeout(poll, pollInterval)
       } else {
-        console.log('All projects finished transitioning, elapsed:', elapsedTime / 1000, 'seconds')
+        console.log('All projects finished transitioning')
       }
     } catch (error) {
       console.error('Error during accelerated project polling:', error)
-      // Continue polling on error, but only if we haven't exceeded max time
-      if (Date.now() - startTime < maxPollTime) {
-        setTimeout(poll, pollInterval)
-      }
+      // Continue polling on error, but log it
+      setTimeout(poll, pollInterval)
     }
   }
   
-  // Start polling immediately
-  poll()
+  // Start polling
+  setTimeout(poll, pollInterval)
 }
 
 // Cancel all pending changes
