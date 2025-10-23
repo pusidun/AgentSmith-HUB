@@ -157,6 +157,15 @@ func main() {
 			logger.Warn("Failed to store leader token in Redis", "error", err)
 		}
 
+		// Verify Redis connection before loading projects
+		// This is critical as projects depend on Redis for state management
+		logger.Info("Verifying Redis connection before loading projects...")
+		if err := common.RedisPing(); err != nil {
+			logger.Error("Redis connection check failed before loading projects, hub will exit", "error", err)
+			os.Exit(1)
+		}
+		logger.Info("Redis connection verified successfully")
+
 		loadLocalComponents()
 		loadLocalProjects()
 
@@ -445,23 +454,51 @@ func loadLocalProjects() {
 			project.SetProject(id, p)
 
 			// Try to restore project status from Redis based on user intention
-			if userWantsRunning, err := common.GetProjectUserIntention(id); err == nil && userWantsRunning {
-				// User wants project to be running, start it
+			userWantsRunning, intentionErr := common.GetProjectUserIntention(id)
+
+			if intentionErr != nil {
+				// Redis error occurred - log warning and default to stopped
+				logger.Warn("Could not retrieve user intention from Redis, defaulting project to stopped",
+					"project", p.Id,
+					"error", intentionErr)
+				p.Status = common.StatusStopped
+			} else if userWantsRunning {
+				// User wants project to be running, try to start it with retries
 				logger.Info("Restoring project to running state based on user intention", "id", p.Id)
-				if err := p.Start(true); err != nil {
-					logger.Error("Failed to start project during restore", "project", p.Id, "error", err)
-					// Record failed restore operation
-					common.RecordProjectOperation(common.OpTypeProjectStart, p.Id, "failed", err.Error(), map[string]interface{}{
-						"triggered_by": "system_restore",
-						"node_id":      common.Config.LocalIP,
-					})
-				} else {
-					logger.Info("Successfully restored project to running state", "id", p.Id)
-					// Record successful restore operation
-					common.RecordProjectOperation(common.OpTypeProjectStart, p.Id, "success", "", map[string]interface{}{
-						"triggered_by": "system_restore",
-						"node_id":      common.Config.LocalIP,
-					})
+
+				var startErr error
+				for attempt := 1; attempt <= 3; attempt++ {
+					startErr = p.Start(true)
+					if startErr == nil {
+						// Success
+						logger.Info("Successfully restored project to running state",
+							"id", p.Id,
+							"attempt", attempt)
+						common.RecordProjectOperation(common.OpTypeProjectStart, p.Id, "success", "", map[string]interface{}{
+							"triggered_by": "system_restore",
+							"node_id":      common.Config.LocalIP,
+							"attempt":      attempt,
+						})
+						break
+					}
+
+					// Failed
+					if attempt < 3 {
+						logger.Warn("Failed to start project during restore, retrying",
+							"project", p.Id,
+							"attempt", attempt,
+							"error", startErr)
+						time.Sleep(time.Duration(2*(1<<uint(attempt-1))) * time.Second) // 2s, 4s
+					} else {
+						logger.Error("Failed to start project during restore after 3 attempts",
+							"project", p.Id,
+							"error", startErr)
+						common.RecordProjectOperation(common.OpTypeProjectStart, p.Id, "failed", startErr.Error(), map[string]interface{}{
+							"triggered_by": "system_restore",
+							"node_id":      common.Config.LocalIP,
+							"attempts":     3,
+						})
+					}
 				}
 			} else {
 				p.Status = common.StatusStopped

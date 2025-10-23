@@ -247,12 +247,20 @@ func RedisInit(addr string, passwd string) error {
 }
 
 func RedisPing() error {
-	// Ping the Redis server to check connection
-	_, err := rdb.Ping(ctx).Result()
-	if err != nil {
-		return err
+	// Ping the Redis server to check connection with retry
+	var lastErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		_, err := rdb.Ping(ctx).Result()
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if attempt < 3 {
+			fmt.Printf("[WARN] Redis ping failed, retrying: attempt=%d, error=%v\n", attempt, err)
+			time.Sleep(time.Duration(500*attempt) * time.Millisecond) // 500ms, 1000ms
+		}
 	}
-	return nil
+	return fmt.Errorf("redis ping failed after 3 attempts: %w", lastErr)
 }
 
 func RedisGet(key string) (string, error) {
@@ -544,11 +552,11 @@ func (dl *DistributedLock) TryAcquire(timeout time.Duration) error {
 	return fmt.Errorf("failed to acquire lock within timeout")
 }
 
-// ===================== Project State Management (New Design) =====================
+// ===================== Project State Management =====================
 
 // SetProjectUserIntention sets the user intention for a project (what user wants)
-// Only "running" is stored; "stopped" projects have their keys removed
-// Uses proj_states key for user intention
+// This is a GLOBAL state shared across all cluster nodes
+// Only "running" is stored; "stopped" projects have their fields removed from the hash
 func SetProjectUserIntention(projectID string, wantRunning bool) error {
 	key := ProjectLegacyStateKeyPrefix
 
@@ -556,27 +564,49 @@ func SetProjectUserIntention(projectID string, wantRunning bool) error {
 		// User wants project to be running
 		return RedisHSet(key, projectID, "running")
 	} else {
-		// User wants project to be stopped - remove the key
+		// User wants project to be stopped - remove the field from hash
 		return RedisHDel(key, projectID)
 	}
 }
 
-// GetProjectUserIntention gets the user intention for a project
+// GetProjectUserIntention gets the user intention for a project with retry mechanism
 // Returns true if user wants it running, false if stopped/not found
-// Uses proj_states key for user intention
+// This reads from GLOBAL state shared across all cluster nodes
+// Includes 3 retries with exponential backoff to handle transient Redis failures
 func GetProjectUserIntention(projectID string) (bool, error) {
 	key := ProjectLegacyStateKeyPrefix
-	value, err := RedisHGet(key, projectID)
-	if err != nil {
-		// Key not found means user wants it stopped
-		return false, nil
+
+	// Retry up to 3 times with exponential backoff
+	var lastErr error
+
+	for attempt := 1; attempt <= 3; attempt++ {
+		value, err := RedisHGet(key, projectID)
+		if err != nil {
+			lastErr = err
+			// Log retry attempts (using fmt.Printf since logger package may cause circular import)
+			if attempt < 3 {
+				fmt.Printf("[WARN] Failed to get project user intention from Redis, retrying: project=%s, attempt=%d, error=%v\n",
+					projectID, attempt, err)
+				// Exponential backoff: 100ms, 200ms, 400ms
+				time.Sleep(time.Duration(100*(1<<uint(attempt-1))) * time.Millisecond)
+				continue
+			}
+			// After 3 attempts, log final error
+			fmt.Printf("[ERROR] Failed to get project user intention from Redis after 3 attempts: project=%s, error=%v\n",
+				projectID, err)
+			// Return false (default to stopped) but also return error for visibility
+			return false, fmt.Errorf("redis error after 3 attempts: %w", err)
+		}
+
+		// Success
+		return value == "running", nil
 	}
-	return value == "running", nil
+
+	return false, fmt.Errorf("failed to get project user intention: %w", lastErr)
 }
 
-// GetAllProjectUserIntentions gets all user intentions for a node
+// GetAllProjectUserIntentions gets all user intentions (GLOBAL state)
 // Returns map of projectID -> bool (true=running, false=stopped)
-// Uses proj_states key for user intention
 func GetAllProjectUserIntentions() (map[string]bool, error) {
 	key := ProjectLegacyStateKeyPrefix
 	values, err := RedisHGetAll(key)
@@ -591,17 +621,16 @@ func GetAllProjectUserIntentions() (map[string]bool, error) {
 	return result, nil
 }
 
-// SetProjectRealState sets the actual runtime state for a project
+// SetProjectRealState sets the actual runtime state for a project on a specific node
 // Stores the real current status: running, stopped, error, starting, stopping
-// Uses proj_real key for actual state
+// This is PER-NODE state, each node maintains its own project states
 func SetProjectRealState(nodeID, projectID string, actualState string) error {
 	key := ProjectRealStateKeyPrefix + nodeID
 	return RedisHSet(key, projectID, actualState)
 }
 
-// GetAllProjectRealStates gets all actual states for a node
+// GetAllProjectRealStates gets all actual states for a specific node
 // Returns map of projectID -> actualState
-// Uses proj_real key for actual state
 func GetAllProjectRealStates(nodeID string) (map[string]string, error) {
 	key := ProjectRealStateKeyPrefix + nodeID
 	values, err := RedisHGetAll(key)

@@ -1333,10 +1333,10 @@ func deleteOutput(c echo.Context) error {
 func deleteProject(c echo.Context) error {
 	id := c.Param("id")
 
-	// API-side persistence: Remove project from Redis when deleted
-	hashKey := "cluster:proj_states:" + common.Config.LocalIP
-	if err := common.RedisHDel(hashKey, id); err != nil {
-		logger.Warn("Failed to remove project state from Redis during deletion", "project", id, "error", err)
+	// API-side persistence: Remove project user intention from Redis when deleted
+	// Use global user intention key (not per-node)
+	if err := common.SetProjectUserIntention(id, false); err != nil {
+		logger.Warn("Failed to remove project user intention from Redis during deletion", "project", id, "error", err)
 	}
 
 	return deleteComponent("project", c)

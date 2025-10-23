@@ -75,19 +75,20 @@ type OperationRecord struct {
 
 // Project state Redis keys - IMPORTANT: Separate expected vs actual states
 const (
-	// Project real state (actual runtime status) - stores the real current status
+	// Project real state (actual runtime status) - stores the real current status per node
 	// This represents what the project actually is (running, stopped, error, starting, stopping)
 	// Format: cluster:proj_real:{nodeID} -> {projectID: "running|stopped|error|starting|stopping"}
 	ProjectRealStateKeyPrefix = "cluster:proj_real:" // + nodeID
 
-	// Project state change timestamps
+	// Project state change timestamps per node
 	// Format: cluster:proj_ts:{nodeID} -> {projectID: "2023-12-01T10:00:00Z"}
 	ProjectStateTimestampKeyPrefix = "cluster:proj_ts:" // + nodeID
 
-	// Legacy key for user intention (what user wants the project to be)
-	// This represents user's expected state (from .project_status file or API calls)
-	// Format: cluster:proj_states:{nodeID} -> {projectID: "running"} (only "running" is stored, "stopped" projects have their keys removed)
-	ProjectLegacyStateKeyPrefix = "cluster:proj_states:" // + nodeID
+	// User intention (what user wants the project to be) - GLOBAL, shared across all nodes
+	// This represents user's expected state (from API calls: start/stop)
+	// Format: cluster:proj_states: -> {projectID: "running"} (only "running" is stored, "stopped" projects have their keys removed)
+	// Note: This key does NOT include nodeID - it's a single global hash shared by all nodes
+	ProjectLegacyStateKeyPrefix = "cluster:proj_states:"
 )
 
 // StartupCoordinator manages cluster startup coordination
