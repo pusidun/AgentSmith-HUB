@@ -71,11 +71,65 @@ func (sl *SyncListener) ResetForFullResync() {
 	logger.Info("Follower reset completed", "new_version", sl.getCurrentVersionUnsafe())
 }
 
+// waitForLeaderReady waits for leader to complete compaction before starting sync
+func (sl *SyncListener) waitForLeaderReady() {
+	logger.Info("Follower waiting for leader to be ready", "node_id", sl.nodeID)
+
+	maxWaitTime := 5 * time.Minute // Maximum wait time
+	checkInterval := 2 * time.Second
+	deadline := time.Now().Add(maxWaitTime)
+
+	for time.Now().Before(deadline) {
+		// Check if leader version is 0 (indicating compaction in progress)
+		leaderVersion, err := sl.getLeaderVersion()
+		if err != nil {
+			logger.Warn("Failed to get leader version, retrying", "error", err)
+			time.Sleep(checkInterval)
+			continue
+		}
+
+		// Parse leader version to check if it's in compaction mode
+		parts := strings.Split(leaderVersion, ".")
+		if len(parts) == 2 {
+			if versionNum, err := strconv.ParseInt(parts[1], 10, 64); err == nil {
+				if versionNum > 0 {
+					// Leader is ready (version > 0)
+					logger.Info("Leader is ready, follower can start syncing",
+						"node_id", sl.nodeID,
+						"leader_version", leaderVersion)
+					return
+				}
+			}
+		}
+
+		logger.Debug("Leader still in compaction mode, waiting",
+			"node_id", sl.nodeID,
+			"leader_version", leaderVersion)
+		time.Sleep(checkInterval)
+	}
+
+	logger.Warn("Timeout waiting for leader to be ready, proceeding anyway",
+		"node_id", sl.nodeID,
+		"max_wait_time", maxWaitTime)
+}
+
+// getLeaderVersion gets the current leader version from Redis
+func (sl *SyncListener) getLeaderVersion() (string, error) {
+	version, err := common.RedisGet("cluster:leader_version")
+	if err != nil {
+		return "", fmt.Errorf("failed to get leader version from Redis: %w", err)
+	}
+	return version, nil
+}
+
 // Start starts the sync listener (follower only)
 func (sl *SyncListener) Start() {
 	if common.IsCurrentNodeLeader() {
 		return
 	}
+
+	// Wait for leader to complete compaction if it's in progress
+	go sl.waitForLeaderReady()
 	go sl.listenSyncCommands()
 }
 
@@ -175,25 +229,22 @@ func (sl *SyncListener) SyncInstructions(toVersion string) error {
 	sl.mu.Lock()
 	defer sl.mu.Unlock()
 
-	// Set execution flag to indicate this follower is executing instructions
+	// Set execution flag to indicate this follower is reading instructions
 	if err := sl.SetFollowerExecutionFlag(sl.nodeID); err != nil {
 		logger.Error("Failed to set execution flag", "error", err)
 	}
 
-	// Ensure flag is cleared when done (with defer for safety)
-	defer func() {
-		if err := sl.ClearFollowerExecutionFlag(sl.nodeID); err != nil {
-			logger.Error("Failed to clear execution flag", "error", err)
-		}
-	}()
-
 	leaderParts := strings.Split(toVersion, ".")
 	if len(leaderParts) != 2 {
+		// Clear flag before returning
+		_ = sl.ClearFollowerExecutionFlag(sl.nodeID)
 		return fmt.Errorf("invalid target version format: %s", toVersion)
 	}
 
 	endVersion, err := strconv.ParseInt(leaderParts[1], 10, 64)
 	if err != nil {
+		// Clear flag before returning
+		_ = sl.ClearFollowerExecutionFlag(sl.nodeID)
 		return fmt.Errorf("invalid target version number: %s", leaderParts[1])
 	}
 
@@ -216,22 +267,20 @@ func (sl *SyncListener) SyncInstructions(toVersion string) error {
 		logger.Info("Follower state reset for full resync", "new_version", sl.getCurrentVersionUnsafe())
 	}
 
-	// Track instruction execution details
-	var processedInstructions []string
-	var failedInstructions []string
+	// PHASE 1: Read all instructions from Redis (blocking leader compaction)
+	logger.Info("Phase 1: Reading all instructions from Redis",
+		"node_id", sl.nodeID,
+		"from_version", sl.currentVersion+1,
+		"to_version", endVersion,
+		"count", endVersion-sl.currentVersion)
+
 	var missingInstructions []int64
 	var instructions []Instruction
 	var compacted uint64
+	readStartTime := time.Now()
 
-	// Process instructions from startVersion+1 to endVersion
-	// Instructions are numbered from 1 onwards (version 0 is temporary state)
+	// Read all instructions in one batch
 	for version := sl.currentVersion + 1; version <= endVersion; version++ {
-		// Refresh execution flag during long operations
-		if err := sl.SetFollowerExecutionFlag(sl.nodeID); err != nil {
-			logger.Warn("Failed to refresh execution flag", "error", err)
-		}
-
-		// Get instruction from Redis
 		key := fmt.Sprintf("cluster:instruction:%d", version)
 		data, err := common.RedisGet(key)
 		if data == GetDeletedIntentionsString() {
@@ -240,20 +289,19 @@ func (sl *SyncListener) SyncInstructions(toVersion string) error {
 		}
 
 		if err != nil {
-			// Record missing instruction - this could indicate a problem
+			// Record missing instruction
 			missingInstructions = append(missingInstructions, version)
 			logger.Warn("Instruction not found in Redis",
 				"version", version,
-				"error", err,
-				"this_may_cause_inconsistency", true)
+				"error", err)
 			continue
 		}
 
 		var instruction Instruction
 		if err := json.Unmarshal([]byte(data), &instruction); err != nil {
 			logger.Error("Failed to unmarshal instruction", "version", version, "error", err)
-			failedInstructions = append(failedInstructions, fmt.Sprintf("v%d: unmarshal error", version))
-			continue // Continue processing other instructions
+			missingInstructions = append(missingInstructions, version)
+			continue
 		} else if instruction.ComponentType != "DELETE" {
 			instructions = append(instructions, instruction)
 		} else {
@@ -261,16 +309,51 @@ func (sl *SyncListener) SyncInstructions(toVersion string) error {
 		}
 	}
 
-	// Log missing instructions if any
+	readDuration := time.Since(readStartTime)
+	logger.Info("Phase 1 completed: All instructions read from Redis",
+		"node_id", sl.nodeID,
+		"instructions_read", len(instructions),
+		"compacted", compacted,
+		"missing", len(missingInstructions),
+		"duration", readDuration)
+
+	// Clear execution flag immediately after reading all instructions
+	// This allows leader to proceed with compaction if needed
+	if err := sl.ClearFollowerExecutionFlag(sl.nodeID); err != nil {
+		logger.Error("Failed to clear execution flag", "error", err)
+	}
+
+	// Check for missing instructions - if any, trigger full resync with delay
 	if len(missingInstructions) > 0 {
 		totalInstructionsExpected := endVersion - sl.currentVersion
 		missingRatio := float64(len(missingInstructions)) / float64(totalInstructionsExpected)
-		logger.Warn("Some instructions are missing during sync, will trigger full resync",
+		logger.Error("Missing instructions detected, will reset and retry after delay",
 			"missing_count", len(missingInstructions),
 			"total_expected", totalInstructionsExpected,
 			"missing_ratio", fmt.Sprintf("%.2f%%", missingRatio*100),
 			"missing_versions", missingInstructions)
+
+		// Clear all local components and start from scratch
+		sl.clearAllLocalComponents()
+		sl.currentVersion = 0
+		sl.baseVersion = leaderParts[0]
+
+		logger.Info("Sleeping 10 seconds before retry due to missing instructions")
+		time.Sleep(10 * time.Second)
+
+		return fmt.Errorf("sync incomplete: %d missing instructions", len(missingInstructions))
 	}
+
+	// PHASE 2: Execute all instructions locally (not blocking leader)
+	logger.Info("Phase 2: Executing all instructions locally",
+		"node_id", sl.nodeID,
+		"instruction_count", len(instructions))
+
+	var processedInstructions []string
+	var failedInstructions []string
+	execStartTime := time.Now()
+
+	// Sort instructions: non-projects first, then projects
 	slices.SortStableFunc(instructions, func(a, b Instruction) int {
 		if a.ComponentType == "project" && b.ComponentType != "project" {
 			return 1
@@ -280,68 +363,65 @@ func (sl *SyncListener) SyncInstructions(toVersion string) error {
 			return int(a.Version) - int(b.Version)
 		}
 	})
+
+	// Execute all instructions
 	for _, instruction := range instructions {
 		version := instruction.Version
 		if version == 0 {
 			continue
 		}
-		// Apply instruction - no retry, fail fast
+
+		// Apply instruction - fail fast, no retry
 		if err := sl.applyInstruction(version); err != nil {
-			logger.Error("Failed to apply instruction", "version", version, "component", instruction.ComponentName, "operation", instruction.Operation, "error", err)
-			failedInstructions = append(failedInstructions, fmt.Sprintf("v%d: %s %s %s (failed: %v)", version, instruction.Operation, instruction.ComponentType, instruction.ComponentName, err))
+			logger.Error("Failed to apply instruction",
+				"version", version,
+				"component", instruction.ComponentName,
+				"operation", instruction.Operation,
+				"error", err)
+			failedInstructions = append(failedInstructions,
+				fmt.Sprintf("v%d: %s %s %s (failed: %v)",
+					version, instruction.Operation, instruction.ComponentType, instruction.ComponentName, err))
 		} else {
-			// Record successfully applied instruction details
-			instructionDesc := fmt.Sprintf("v%d: %s %s %s", version, instruction.Operation, instruction.ComponentType, instruction.ComponentName)
-			instructionDesc += fmt.Sprintf(" (content: %d chars)", len(instruction.Content))
+			instructionDesc := fmt.Sprintf("v%d: %s %s %s",
+				version, instruction.Operation, instruction.ComponentType, instruction.ComponentName)
 			processedInstructions = append(processedInstructions, instructionDesc)
 		}
 	}
 
-	// Save old version for logging
+	execDuration := time.Since(execStartTime)
 	oldVersion := sl.getCurrentVersionUnsafe()
 
-	// Only update version if all instructions succeeded
-	if len(failedInstructions) == 0 && len(missingInstructions) == 0 {
+	// PHASE 3: Update version or trigger full resync
+	if len(failedInstructions) == 0 {
 		sl.currentVersion = endVersion
 		sl.baseVersion = leaderParts[0]
-		logger.Info("All instructions applied successfully, version updated", "new_version", sl.getCurrentVersionUnsafe())
+		logger.Info("Phase 2 completed: All instructions applied successfully",
+			"node_id", sl.nodeID,
+			"from_version", oldVersion,
+			"to_version", sl.getCurrentVersionUnsafe(),
+			"processed_count", len(processedInstructions),
+			"exec_duration", execDuration,
+			"total_duration", time.Since(readStartTime))
 	} else {
 		// If any instruction failed, clear all components and start from scratch
-		logger.Error("Some instructions failed, clearing all components for full resync",
+		logger.Error("Phase 2 failed: Some instructions failed, will reset and retry after delay",
+			"node_id", sl.nodeID,
 			"failed_count", len(failedInstructions),
-			"missing_count", len(missingInstructions),
 			"current_version", sl.getCurrentVersionUnsafe(),
-			"target_version", toVersion)
+			"target_version", toVersion,
+			"failed_instructions", strings.Join(failedInstructions, "; "))
 
-		// Clear all local components and projects (never fails)
+		// Clear all local components and projects
 		sl.clearAllLocalComponents()
 
 		// Reset to version 0 to trigger full resync on next attempt
 		sl.currentVersion = 0
 		sl.baseVersion = leaderParts[0]
-		logger.Info("Follower reset to version 0, will perform full resync on next attempt")
-	}
 
-	// Log final sync result
-	if len(failedInstructions) > 0 || len(missingInstructions) > 0 {
-		logger.Error("Instructions synced with some failures or missing instructions",
-			"current_version", sl.getCurrentVersionUnsafe(),
-			"target_version", toVersion,
-			"compacted", compacted,
-			"processed", len(processedInstructions),
-			"failed", len(failedInstructions),
-			"missing", len(missingInstructions),
-			"successful_instructions", strings.Join(processedInstructions, "; "),
-			"failed_instructions", strings.Join(failedInstructions, "; "),
-			"missing_versions", missingInstructions)
-		return fmt.Errorf("sync incomplete: %d failed, %d missing instructions", len(failedInstructions), len(missingInstructions))
-	} else {
-		logger.Info("Instructions synced successfully",
-			"from_version", oldVersion,
-			"to_version", sl.getCurrentVersionUnsafe(),
-			"count", len(processedInstructions),
-			"compacted", compacted,
-			"instructions", strings.Join(processedInstructions, "; "))
+		logger.Info("Sleeping 10 seconds before retry due to execution failures")
+		time.Sleep(10 * time.Second)
+
+		return fmt.Errorf("sync incomplete: %d failed instructions", len(failedInstructions))
 	}
 
 	return nil
@@ -421,12 +501,11 @@ func (sl *SyncListener) applyInstruction(version int64) error {
 			common.RecordChangePush(instruction.ComponentType, instruction.ComponentName, "", instruction.Content, "", "failed", err.Error())
 			return err
 		}
-	case "start":
-		return globalProjectCmdHandler.ExecuteCommandWithOptions(instruction.ComponentName, "start", true)
-	case "stop":
-		return globalProjectCmdHandler.ExecuteCommandWithOptions(instruction.ComponentName, "stop", true)
-	case "restart":
-		return globalProjectCmdHandler.ExecuteCommandWithOptions(instruction.ComponentName, "restart", true)
+	case "start", "stop", "restart":
+		if globalProjectCmdHandler == nil {
+			return fmt.Errorf("project command handler not initialized")
+		}
+		return globalProjectCmdHandler.ExecuteCommandWithOptions(instruction.ComponentName, instruction.Operation, true)
 	default:
 		return fmt.Errorf("unknown operation: %s", instruction.Operation)
 	}
@@ -449,30 +528,52 @@ func (sl *SyncListener) applyInstruction(version int64) error {
 
 // clearAllLocalComponents clears all local components and projects when leader session changes
 // This function never fails - it will try best effort to clean everything
+// IMPORTANT: This ensures complete cleanup of all running resources before full resync
 func (sl *SyncListener) clearAllLocalComponents() {
-	logger.Info("Clearing all local components and projects for full resync")
+	logger.Info("===== Starting COMPLETE cleanup of all local components =====",
+		"node_id", sl.nodeID,
+		"reason", "full_resync_required")
 
-	// Step 1: Stop all running projects first
-	// Collect running projects first to avoid deadlock
-	var runningProjects []*project.Project
+	// Step 1: Stop ALL projects (running, starting, error state, even stopped ones)
+	// This ensures all inputs/outputs/channels are properly closed
+	var allProjects []*project.Project
 	project.ForEachProject(func(projectName string, proj *project.Project) bool {
-		if proj.Status == common.StatusRunning || proj.Status == common.StatusStarting || proj.Status == common.StatusError {
-			runningProjects = append(runningProjects, proj)
-		}
+		allProjects = append(allProjects, proj)
 		return true
 	})
 
-	// Stop projects without holding locks - continue even if some fail
-	for _, proj := range runningProjects {
-		logger.Info("Stopping project for cleanup", "project", proj.Id)
+	logger.Info("Step 1: Stopping all projects",
+		"total_projects", len(allProjects))
+
+	// Stop projects one by one, wait for each to complete
+	stoppedCount := 0
+	failedCount := 0
+	for _, proj := range allProjects {
+		logger.Info("Stopping project for complete cleanup",
+			"project", proj.Id,
+			"status", proj.Status)
+
+		// Force stop regardless of current status
 		if err := proj.Stop(true); err != nil {
-			logger.Warn("Failed to stop project during cleanup, continuing anyway", "project", proj.Id, "error", err)
+			logger.Warn("Failed to stop project during cleanup, will force delete anyway",
+				"project", proj.Id,
+				"error", err)
+			failedCount++
+		} else {
+			stoppedCount++
 		}
+
+		// Give a brief moment for resources to be released
+		time.Sleep(100 * time.Millisecond)
 	}
 
-	// Step 2: Delete all component instances (to match state of newly started follower)
-	// Get all component IDs before deletion
-	var projectIDs, inputIDs, outputIDs, rulesetIDs []string
+	logger.Info("Step 1 completed: Project stop phase finished",
+		"stopped", stoppedCount,
+		"failed", failedCount,
+		"total", len(allProjects))
+
+	// Step 2: Collect all component IDs before deletion
+	var projectIDs, inputIDs, outputIDs, rulesetIDs, pluginIDs []string
 
 	project.ForEachProject(func(projectName string, _ *project.Project) bool {
 		projectIDs = append(projectIDs, projectName)
@@ -491,28 +592,62 @@ func (sl *SyncListener) clearAllLocalComponents() {
 		rulesetIDs = append(rulesetIDs, id)
 	}
 
-	// Delete all instances - these operations don't fail
+	// Also collect plugins
+	common.ForEachRawConfig("plugin", func(pluginID, _ string) bool {
+		pluginIDs = append(pluginIDs, pluginID)
+		return true
+	})
+
+	logger.Info("Step 2: Collected all component IDs for deletion",
+		"projects", len(projectIDs),
+		"inputs", len(inputIDs),
+		"outputs", len(outputIDs),
+		"rulesets", len(rulesetIDs),
+		"plugins", len(pluginIDs))
+
+	// Step 3: Delete all component instances
+	// Order matters: delete projects first, then inputs/outputs/rulesets
+	logger.Info("Step 3: Deleting all component instances")
+
 	for _, id := range projectIDs {
 		project.DeleteProject(id)
+		logger.Debug("Deleted project instance", "project", id)
 	}
+
 	for _, id := range inputIDs {
 		project.DeleteInput(id)
+		logger.Debug("Deleted input instance", "input", id)
 	}
+
 	for _, id := range outputIDs {
 		project.DeleteOutput(id)
+		logger.Debug("Deleted output instance", "output", id)
 	}
+
 	for _, id := range rulesetIDs {
 		project.DeleteRuleset(id)
+		logger.Debug("Deleted ruleset instance", "ruleset", id)
 	}
 
-	// Step 3: Clear global component raw config maps
+	// Note: Plugins don't have running state, they will be cleaned by ClearAllRawConfigsForAllTypes
+
+	// Step 4: Clear all raw config maps (memory cleanup)
+	// This includes plugins, inputs, outputs, rulesets, projects
+	logger.Info("Step 4: Clearing all raw config maps from memory")
 	common.ClearAllRawConfigsForAllTypes()
 
-	logger.Info("Successfully cleared all components and projects",
+	// Step 5: Give system a moment to fully release all resources
+	logger.Info("Step 5: Waiting for all resources to be fully released")
+	time.Sleep(500 * time.Millisecond)
+
+	logger.Info("===== COMPLETE cleanup finished successfully =====",
+		"node_id", sl.nodeID,
 		"projects_deleted", len(projectIDs),
 		"inputs_deleted", len(inputIDs),
 		"outputs_deleted", len(outputIDs),
-		"rulesets_deleted", len(rulesetIDs))
+		"rulesets_deleted", len(rulesetIDs),
+		"plugins_deleted", len(pluginIDs),
+		"summary", "All running resources stopped and cleaned")
 }
 
 // createComponentInstance creates actual component instances from configuration

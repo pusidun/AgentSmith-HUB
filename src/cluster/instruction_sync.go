@@ -313,8 +313,29 @@ func (im *InstructionManager) PublishInstruction(componentName, componentType, c
 	err := im.CompactAndSaveInstructions(&instruction)
 	if err != nil {
 		logger.Error("Failed to compact and save instructions", "error", err)
+
+		// Record failed instruction
+		common.RecordClusterInstruction(
+			common.OpTypeInstructionPublish,
+			operation,
+			componentName,
+			componentType,
+			"failed",
+			err.Error(),
+			content,
+			map[string]interface{}{
+				"version":          im.currentVersion,
+				"requires_restart": requiresRestart,
+				"dependencies":     dependencies,
+				"metadata":         metadata,
+				"role":             "leader",
+			},
+		)
+
+		return err // Return error instead of nil
 	}
 
+	// Only send publish_complete if compaction succeeded
 	publishComplete := map[string]interface{}{
 		"action":         "publish_complete",
 		"leader_version": im.getCurrentVersionUnsafe(),
@@ -326,21 +347,14 @@ func (im *InstructionManager) PublishInstruction(componentName, componentType, c
 	}
 	logger.Info("Instruction published successfully", "version", im.currentVersion, "component", componentName, "operation", operation, "requires_restart", requiresRestart)
 
-	// Record cluster instruction (success or failed)
-	status := "success"
-	errorMsg := ""
-	if err != nil {
-		status = "failed"
-		errorMsg = err.Error()
-	}
-
+	// Record successful instruction
 	common.RecordClusterInstruction(
 		common.OpTypeInstructionPublish,
 		operation,
 		componentName,
 		componentType,
-		status,
-		errorMsg,
+		"success",
+		"",
 		content,
 		map[string]interface{}{
 			"version":          im.currentVersion,
@@ -421,11 +435,33 @@ func (im *InstructionManager) PublishProjectsRestart(projectNames []string, reas
 		"batch":  true,
 	}
 
+	var errors []string
+	successCount := 0
+
 	for _, projectName := range projectNames {
 		if err := im.PublishInstruction(projectName, "project", "", "restart", nil, metadata); err != nil {
-			return err
+			logger.Error("Failed to publish restart instruction for project",
+				"project", projectName,
+				"error", err)
+			errors = append(errors, fmt.Sprintf("%s: %v", projectName, err))
+			// Continue processing other projects instead of returning immediately
+		} else {
+			successCount++
 		}
 	}
+
+	if len(errors) > 0 {
+		logger.Warn("Batch restart completed with some failures",
+			"total", len(projectNames),
+			"success", successCount,
+			"failed", len(errors))
+		return fmt.Errorf("failed to restart %d/%d projects: %s",
+			len(errors), len(projectNames), strings.Join(errors, "; "))
+	}
+
+	logger.Info("Batch restart completed successfully",
+		"total", len(projectNames),
+		"reason", reason)
 	return nil
 }
 
