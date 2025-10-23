@@ -16,6 +16,44 @@ import (
 
 const HitRuleIdFieldName = "_hub_hit_rule_id"
 
+// parseProjectInfoFromPNS parses project information from ProjectNodeSequence
+// Format: "INPUT.api_sec.RULESET.test.OUTPUT.print_demo" -> project: "api_sec", ruleset: "test"
+// Also handles test mode: "TEST.INPUT.api_sec.RULESET.test.OUTPUT.print_demo"
+func parseProjectInfoFromPNS(pns string) (projectID, rulesetID string) {
+	if pns == "" {
+		return "", ""
+	}
+
+	parts := strings.Split(pns, ".")
+	if len(parts) < 4 {
+		return "", ""
+	}
+
+	// Handle test mode prefix
+	startIndex := 0
+	if len(parts) > 0 && strings.ToUpper(parts[0]) == "TEST" {
+		startIndex = 1
+	}
+
+	// Find INPUT type and extract project ID
+	for i := startIndex; i < len(parts)-1; i++ {
+		if strings.ToUpper(parts[i]) == "INPUT" {
+			projectID = parts[i+1]
+			break
+		}
+	}
+
+	// Find RULESET type and extract ruleset ID
+	for i := startIndex; i < len(parts)-1; i++ {
+		if strings.ToUpper(parts[i]) == "RULESET" {
+			rulesetID = parts[i+1]
+			break
+		}
+	}
+
+	return projectID, rulesetID
+}
+
 // SIMD statistics variables
 var (
 	simdEnabled bool = false // SIMD enable flag, will be set from config
@@ -804,7 +842,14 @@ func (r *Ruleset) executeAppend(rule *Rule, operationID int, copied bool, data m
 			if err == nil {
 				modifiedData[appendOp.FieldName] = boolResult
 			} else {
-				logger.PluginError("Check-type plugin evaluation error in append", "plugin", appendOp.Plugin.Name, "error", err)
+				// Plugin error is already logged in plugin execution, no need to duplicate
+				// But add context information for better debugging
+				projectID, rulesetID := parseProjectInfoFromPNS(r.ProjectNodeSequence)
+				logger.Info("Check-type plugin evaluation failed in append",
+					"plugin", appendOp.Plugin.Name,
+					"project", projectID,
+					"ruleset", rulesetID,
+					"ruleID", rule.ID)
 			}
 		} else {
 			// For interface{} type plugins, use the original FuncEvalOther logic
@@ -821,7 +866,14 @@ func (r *Ruleset) executeAppend(rule *Rule, operationID int, copied bool, data m
 
 				modifiedData[appendOp.FieldName] = res
 			} else if err != nil {
-				logger.PluginError("Interface-type plugin evaluation error in append", "plugin", appendOp.Plugin.Name, "error", err)
+				// Plugin error is already logged in plugin execution, no need to duplicate
+				// But add context information for better debugging
+				projectID, rulesetID := parseProjectInfoFromPNS(r.ProjectNodeSequence)
+				logger.Info("Interface-type plugin evaluation failed in append",
+					"plugin", appendOp.Plugin.Name,
+					"project", projectID,
+					"ruleset", rulesetID,
+					"ruleID", rule.ID)
 			}
 		}
 	}
@@ -853,7 +905,14 @@ func (r *Ruleset) executeModify(rule *Rule, operationID int, copied bool, data m
 	if modifyOp.Plugin.ReturnType == "bool" {
 		boolResult, err := modifyOp.Plugin.FuncEvalCheckNode(args...)
 		if err != nil {
-			logger.PluginError("Check-type plugin evaluation error in modify", "plugin", modifyOp.Plugin.Name, "error", err)
+			// Plugin error is already logged in plugin execution, no need to duplicate
+			// But add context information for better debugging
+			projectID, rulesetID := parseProjectInfoFromPNS(r.ProjectNodeSequence)
+			logger.Info("Check-type plugin evaluation failed in modify",
+				"plugin", modifyOp.Plugin.Name,
+				"project", projectID,
+				"ruleset", rulesetID,
+				"ruleID", rule.ID)
 			return
 		}
 		if modifyOp.FieldName != "" {
@@ -869,7 +928,14 @@ func (r *Ruleset) executeModify(rule *Rule, operationID int, copied bool, data m
 	res, ok, err := modifyOp.Plugin.FuncEvalOther(args...)
 	if err != nil || !ok {
 		if err != nil {
-			logger.PluginError("Interface-type plugin evaluation error in modify", "plugin", modifyOp.Plugin.Name, "error", err)
+			// Plugin error is already logged in plugin execution, no need to duplicate
+			// But add context information for better debugging
+			projectID, rulesetID := parseProjectInfoFromPNS(r.ProjectNodeSequence)
+			logger.Info("Interface-type plugin evaluation failed in modify",
+				"plugin", modifyOp.Plugin.Name,
+				"project", projectID,
+				"ruleset", rulesetID,
+				"ruleID", rule.ID)
 		}
 		return
 	}
@@ -928,7 +994,14 @@ func (r *Ruleset) executePlugin(rule *Rule, operationID int, dataCopy map[string
 		// For check-type plugins (bool return type), use FuncEvalCheckNode
 		ok, err := pluginOp.Plugin.FuncEvalCheckNode(args...)
 		if err != nil {
-			logger.PluginError("Check-type plugin evaluation error", "plugin", pluginOp.Plugin.Name, "error", err)
+			// Plugin error is already logged in plugin execution, no need to duplicate
+			// But add context information for better debugging
+			projectID, rulesetID := parseProjectInfoFromPNS(r.ProjectNodeSequence)
+			logger.Info("Check-type plugin evaluation failed",
+				"plugin", pluginOp.Plugin.Name,
+				"project", projectID,
+				"ruleset", rulesetID,
+				"ruleID", rule.ID)
 		}
 
 		if !ok {
@@ -938,7 +1011,14 @@ func (r *Ruleset) executePlugin(rule *Rule, operationID int, dataCopy map[string
 		// For interface{} type plugins, use FuncEvalOther (for side effects, result is ignored)
 		_, ok, err := pluginOp.Plugin.FuncEvalOther(args...)
 		if err != nil {
-			logger.PluginError("Interface-type plugin evaluation error", "plugin", pluginOp.Plugin.Name, "error", err)
+			// Plugin error is already logged in plugin execution, no need to duplicate
+			// But add context information for better debugging
+			projectID, rulesetID := parseProjectInfoFromPNS(r.ProjectNodeSequence)
+			logger.Info("Interface-type plugin evaluation failed",
+				"plugin", pluginOp.Plugin.Name,
+				"project", projectID,
+				"ruleset", rulesetID,
+				"ruleID", rule.ID)
 		}
 
 		if !ok {
