@@ -856,10 +856,16 @@ func (r *Ruleset) executeAppend(rule *Rule, operationID int, copied bool, data m
 			res, ok, err := appendOp.Plugin.FuncEvalOther(args...)
 			if err == nil && ok {
 				if appendOp.FieldName == PluginArgFromRawSymbol {
-					if r, ok := res.(map[string]interface{}); ok {
-						res = r
+					if rmap, ok := res.(map[string]interface{}); ok {
+						res = rmap
 					} else {
-						logger.PluginError("Plugin result is not a map", "plugin", appendOp.Plugin.Name, "result", res)
+						projectID, rulesetID := parseProjectInfoFromPNS(r.ProjectNodeSequence)
+						logger.PluginErrorWithContext("Plugin result is not a map",
+							"plugin", appendOp.Plugin.Name,
+							"project", projectID,
+							"ruleset", rulesetID,
+							"ruleID", rule.ID,
+							"result", res)
 						res = nil
 					}
 				}
@@ -919,7 +925,12 @@ func (r *Ruleset) executeModify(rule *Rule, operationID int, copied bool, data m
 			modifiedData[modifyOp.FieldName] = boolResult
 			return
 		} else {
-			logger.PluginError("Modify without field requires map result; got bool", "plugin", modifyOp.Plugin.Name, "ruleID", rule.ID)
+			projectID, rulesetID := parseProjectInfoFromPNS(r.ProjectNodeSequence)
+			logger.PluginErrorWithContext("Modify without field requires map result; got bool",
+				"plugin", modifyOp.Plugin.Name,
+				"project", projectID,
+				"ruleset", rulesetID,
+				"ruleID", rule.ID)
 			return
 		}
 	}
@@ -946,7 +957,13 @@ func (r *Ruleset) executeModify(rule *Rule, operationID int, copied bool, data m
 				modifiedData = rmap
 				return
 			} else {
-				logger.PluginError("Plugin result is not a map", "plugin", modifyOp.Plugin.Name, "result", res)
+				projectID, rulesetID := parseProjectInfoFromPNS(r.ProjectNodeSequence)
+				logger.PluginErrorWithContext("Plugin result is not a map",
+					"plugin", modifyOp.Plugin.Name,
+					"project", projectID,
+					"ruleset", rulesetID,
+					"ruleID", rule.ID,
+					"result", res)
 				return
 			}
 		}
@@ -959,7 +976,13 @@ func (r *Ruleset) executeModify(rule *Rule, operationID int, copied bool, data m
 		modifiedData = rmap
 		return
 	} else {
-		logger.PluginError("Modify without field expects map result to replace data", "plugin", modifyOp.Plugin.Name, "result", res)
+		projectID, rulesetID := parseProjectInfoFromPNS(r.ProjectNodeSequence)
+		logger.PluginErrorWithContext("Modify without field expects map result to replace data",
+			"plugin", modifyOp.Plugin.Name,
+			"project", projectID,
+			"ruleset", rulesetID,
+			"ruleID", rule.ID,
+			"result", res)
 		return
 	}
 }
