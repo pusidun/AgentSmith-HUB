@@ -170,13 +170,19 @@ func (sm *SystemMonitor) calculateCPUPercent() float64 {
 		return 0.1
 	}
 
-	// Calculate CPU percentage
+	// Calculate CPU percentage (total across all cores)
 	cpuPercent := float64(cpuTimeDiff) / float64(wallTimeDiff) * 100
 
-	// Cap at reasonable values (shouldn't exceed 100% * number of CPUs)
-	maxCPU := float64(runtime.NumCPU()) * 100
-	if cpuPercent > maxCPU {
-		cpuPercent = maxCPU
+	// Normalize to average per-core usage (0-100%)
+	// This makes the value more intuitive for monitoring
+	numCPU := float64(runtime.NumCPU())
+	if numCPU > 0 {
+		cpuPercent = cpuPercent / numCPU
+	}
+
+	// Cap at 100% (shouldn't exceed for normalized value)
+	if cpuPercent > 100 {
+		cpuPercent = 100
 	}
 
 	// Ensure minimum value for running process
