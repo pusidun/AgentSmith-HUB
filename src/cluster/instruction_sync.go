@@ -381,7 +381,7 @@ func (im *InstructionManager) PublishInstruction(componentName, componentType, c
 	if data, err := json.Marshal(publishComplete); err == nil {
 		_ = common.RedisPublish("cluster:sync_command", string(data))
 	}
-	logger.Info("Instruction published successfully", "version", im.currentVersion, "component", componentName, "operation", operation, "requires_restart", requiresRestart)
+	logger.Info("Instruction published", "version", im.currentVersion, "component", componentName, "operation", operation)
 
 	// Record successful instruction
 	common.RecordClusterInstruction(
@@ -597,7 +597,6 @@ func (im *InstructionManager) InitializeLeaderInstructions() error {
 
 		// Only increment counter after successful write
 		instructionCount++
-		logger.Debug("Published initialization instruction", "version", instructionCount, "component", componentName, "operation", operation)
 		return nil
 	}
 
@@ -647,7 +646,6 @@ func (im *InstructionManager) InitializeLeaderInstructions() error {
 	})
 
 	// 6. Start running projects
-	logger.Info("Reading project user intentions from Redis to send start instructions...")
 
 	if userIntentions, err := common.GetAllProjectUserIntentions(); err == nil {
 		for projectID, wantRunning := range userIntentions {
@@ -655,8 +653,6 @@ func (im *InstructionManager) InitializeLeaderInstructions() error {
 				if err := publishInstructionDirectly(projectID, "project", "", "start", nil, nil); err != nil {
 					logger.Error("Failed to publish project start instruction", "project", projectID, "error", err)
 					failedComponents = append(failedComponents, fmt.Sprintf("project_start:%s", projectID))
-				} else {
-					logger.Info("Published project start instruction", "project", projectID)
 				}
 			}
 		}

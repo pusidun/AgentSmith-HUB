@@ -226,14 +226,12 @@ func (hm *HeartbeatManager) listenHeartbeats() {
 			if retryDelay > maxRetryDelay {
 				retryDelay = maxRetryDelay
 			}
-			logger.Info("Retrying heartbeat listener connection", "delay", retryDelay, "retry_count", retryCount)
 			time.Sleep(retryDelay)
 			retryCount++
 			continue
 		}
 
 		pubsub := client.Subscribe(context.Background(), "cluster:heartbeat")
-		logger.Info("Heartbeat listener subscribed to Redis pub/sub channel")
 		retryCount = 0 // Reset retry count on successful connection
 
 		// Listen for messages
@@ -267,7 +265,6 @@ func (hm *HeartbeatManager) listenHeartbeats() {
 				if !exists {
 					// New node detected, track it in Redis for node enumeration
 					hm.trackNodeInRedis(heartbeat.NodeID)
-					logger.Info("New follower node detected and tracked", "node_id", heartbeat.NodeID)
 				}
 
 				// Update node info in memory
@@ -298,7 +295,6 @@ func (hm *HeartbeatManager) listenHeartbeats() {
 
 		// Clean up before reconnecting
 		pubsub.Close()
-		logger.Info("Heartbeat listener disconnected, will reconnect in 2 seconds...")
 		time.Sleep(2 * time.Second)
 	}
 }
@@ -315,8 +311,6 @@ func (hm *HeartbeatManager) trackNodeInRedis(nodeID string) {
 	// Store node info with 48 hours TTL (48 * 60 * 60 = 172800 seconds)
 	if _, err := common.RedisSet(key, timestamp, 172800); err != nil {
 		logger.Warn("Failed to track node in Redis", "node_id", nodeID, "error", err)
-	} else {
-		logger.Debug("Tracked node in Redis for enumeration", "node_id", nodeID)
 	}
 }
 
@@ -328,17 +322,11 @@ func (hm *HeartbeatManager) checkVersionSync(heartbeat HeartbeatData) {
 
 	// Skip sync if leader is in compaction mode
 	if GlobalInstructionManager.IsCompacting() {
-		logger.Debug("Leader in compaction mode, skipping sync", "follower_node", heartbeat.NodeID)
 		return
 	}
 
 	leaderVersion := GlobalInstructionManager.GetCurrentVersion()
 	if heartbeat.Version != leaderVersion {
-		logger.Debug("Version mismatch detected",
-			"node", heartbeat.NodeID,
-			"follower_version", heartbeat.Version,
-			"leader_version", leaderVersion)
-
 		// Send sync command
 		syncCmd := map[string]interface{}{
 			"node_id":        heartbeat.NodeID,

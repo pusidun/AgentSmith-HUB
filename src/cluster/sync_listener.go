@@ -94,9 +94,6 @@ func (sl *SyncListener) waitForLeaderReadyIfNeeded(targetVersion string) error {
 	}
 
 	// Leader is in compaction mode (version = 0), wait for it to complete
-	logger.Info("Leader is in compaction mode, waiting for completion",
-		"node_id", sl.nodeID,
-		"leader_version", targetVersion)
 
 	maxWaitTime := 5 * time.Minute // Maximum wait time
 	checkInterval := 1 * time.Second
@@ -116,9 +113,6 @@ func (sl *SyncListener) waitForLeaderReadyIfNeeded(targetVersion string) error {
 		parts := strings.Split(leaderVersion, ".")
 		if len(parts) == 2 {
 			if versionNum, err := strconv.ParseInt(parts[1], 10, 64); err == nil && versionNum > 0 {
-				logger.Info("Leader compaction completed, proceeding with sync",
-					"node_id", sl.nodeID,
-					"new_leader_version", leaderVersion)
 				return nil
 			}
 		}
@@ -150,14 +144,12 @@ func (sl *SyncListener) listenSyncCommands() {
 			if retryDelay > maxRetryDelay {
 				retryDelay = maxRetryDelay
 			}
-			logger.Info("Retrying sync listener connection", "delay", retryDelay, "retry_count", retryCount)
 			time.Sleep(retryDelay)
 			retryCount++
 			continue
 		}
 
 		pubsub := client.Subscribe(context.Background(), "cluster:sync_command")
-		logger.Info("Sync listener subscribed to Redis pub/sub channel")
 		retryCount = 0 // Reset retry count on successful connection
 
 		// Listen for messages
@@ -197,7 +189,6 @@ func (sl *SyncListener) listenSyncCommands() {
 
 		// Clean up before reconnecting
 		pubsub.Close()
-		logger.Info("Sync listener disconnected, will reconnect in 2 seconds...")
 		time.Sleep(2 * time.Second)
 	}
 }
@@ -270,11 +261,6 @@ func (sl *SyncListener) SyncInstructions(toVersion string) error {
 	}
 
 	// PHASE 1: Read all instructions from Redis (blocking leader compaction)
-	logger.Info("Phase 1: Reading all instructions from Redis",
-		"node_id", sl.nodeID,
-		"from_version", sl.currentVersion+1,
-		"to_version", endVersion,
-		"count", endVersion-sl.currentVersion)
 
 	var missingInstructions []int64
 	var instructions []Instruction
@@ -311,19 +297,15 @@ func (sl *SyncListener) SyncInstructions(toVersion string) error {
 		}
 	}
 
-	readDuration := time.Since(readStartTime)
-	logger.Info("Phase 1 completed: All instructions read from Redis",
-		"node_id", sl.nodeID,
-		"instructions_read", len(instructions),
-		"compacted", compacted,
-		"missing", len(missingInstructions),
-		"duration", readDuration)
+	_ = time.Since(readStartTime)
 
 	// Clear execution flag immediately after reading all instructions
 	// This allows leader to proceed with compaction if needed
 	if err := sl.ClearFollowerExecutionFlag(sl.nodeID); err != nil {
 		logger.Error("Failed to clear execution flag", "error", err)
 	}
+
+	logger.Info("Instructions read", "count", len(instructions), "compacted", compacted)
 
 	// Check for missing instructions - if any, trigger full resync with delay
 	if len(missingInstructions) > 0 {
@@ -347,13 +329,9 @@ func (sl *SyncListener) SyncInstructions(toVersion string) error {
 	}
 
 	// PHASE 2: Execute all instructions locally (not blocking leader)
-	logger.Info("Phase 2: Executing all instructions locally",
-		"node_id", sl.nodeID,
-		"instruction_count", len(instructions))
-
+	logger.Info("Executing instructions", "count", len(instructions))
 	var processedInstructions []string
 	var failedInstructions []string
-	execStartTime := time.Now()
 
 	// Sort instructions: non-projects first, then projects
 	slices.SortStableFunc(instructions, func(a, b Instruction) int {
@@ -390,20 +368,11 @@ func (sl *SyncListener) SyncInstructions(toVersion string) error {
 		}
 	}
 
-	execDuration := time.Since(execStartTime)
-	oldVersion := sl.getCurrentVersionUnsafe()
-
 	// PHASE 3: Update version or trigger full resync
 	if len(failedInstructions) == 0 {
 		sl.currentVersion = endVersion
 		sl.baseVersion = leaderParts[0]
-		logger.Info("Phase 2 completed: All instructions applied successfully",
-			"node_id", sl.nodeID,
-			"from_version", oldVersion,
-			"to_version", sl.getCurrentVersionUnsafe(),
-			"processed_count", len(processedInstructions),
-			"exec_duration", execDuration,
-			"total_duration", time.Since(readStartTime))
+		logger.Info("Follower sync completed", "version", sl.getCurrentVersionUnsafe(), "processed", len(processedInstructions), "instruction_count", len(instructions))
 	} else {
 		// If any instruction failed, clear all components and start from scratch
 		logger.Error("Phase 2 failed: Some instructions failed, will reset and retry after delay",
@@ -532,7 +501,7 @@ func (sl *SyncListener) applyInstruction(version int64) error {
 // This function never fails - it will try best effort to clean everything
 // IMPORTANT: This ensures complete cleanup of all running resources before full resync
 func (sl *SyncListener) clearAllLocalComponents() {
-	logger.Info("===== Starting COMPLETE cleanup of all local components =====",
+	logger.Info("Follower resetting all components",
 		"node_id", sl.nodeID,
 		"reason", "full_resync_required")
 
@@ -544,16 +513,10 @@ func (sl *SyncListener) clearAllLocalComponents() {
 		return true
 	})
 
-	logger.Info("Step 1: Stopping all projects",
-		"total_projects", len(allProjects))
-
 	// Stop projects one by one, wait for each to complete
 	stoppedCount := 0
 	failedCount := 0
 	for _, proj := range allProjects {
-		logger.Info("Stopping project for complete cleanup",
-			"project", proj.Id,
-			"status", proj.Status)
 
 		// Force stop regardless of current status
 		if err := proj.Stop(true); err != nil {
@@ -568,11 +531,6 @@ func (sl *SyncListener) clearAllLocalComponents() {
 		// Give a brief moment for resources to be released
 		time.Sleep(100 * time.Millisecond)
 	}
-
-	logger.Info("Step 1 completed: Project stop phase finished",
-		"stopped", stoppedCount,
-		"failed", failedCount,
-		"total", len(allProjects))
 
 	// Step 2: Collect all component IDs before deletion
 	var projectIDs, inputIDs, outputIDs, rulesetIDs, pluginIDs []string
@@ -600,56 +558,35 @@ func (sl *SyncListener) clearAllLocalComponents() {
 		return true
 	})
 
-	logger.Info("Step 2: Collected all component IDs for deletion",
-		"projects", len(projectIDs),
-		"inputs", len(inputIDs),
-		"outputs", len(outputIDs),
-		"rulesets", len(rulesetIDs),
-		"plugins", len(pluginIDs))
-
 	// Step 3: Delete all component instances
 	// Order matters: delete projects first, then inputs/outputs/rulesets
-	logger.Info("Step 3: Deleting all component instances")
 
 	for _, id := range projectIDs {
 		project.DeleteProject(id)
-		logger.Debug("Deleted project instance", "project", id)
 	}
 
 	for _, id := range inputIDs {
 		project.DeleteInput(id)
-		logger.Debug("Deleted input instance", "input", id)
 	}
 
 	for _, id := range outputIDs {
 		project.DeleteOutput(id)
-		logger.Debug("Deleted output instance", "output", id)
 	}
 
 	for _, id := range rulesetIDs {
 		project.DeleteRuleset(id)
-		logger.Debug("Deleted ruleset instance", "ruleset", id)
 	}
 
 	// Note: Plugins don't have running state, they will be cleaned by ClearAllRawConfigsForAllTypes
 
 	// Step 4: Clear all raw config maps (memory cleanup)
 	// This includes plugins, inputs, outputs, rulesets, projects
-	logger.Info("Step 4: Clearing all raw config maps from memory")
 	common.ClearAllRawConfigsForAllTypes()
 
 	// Step 5: Give system a moment to fully release all resources
-	logger.Info("Step 5: Waiting for all resources to be fully released")
 	time.Sleep(500 * time.Millisecond)
 
-	logger.Info("===== COMPLETE cleanup finished successfully =====",
-		"node_id", sl.nodeID,
-		"projects_deleted", len(projectIDs),
-		"inputs_deleted", len(inputIDs),
-		"outputs_deleted", len(outputIDs),
-		"rulesets_deleted", len(rulesetIDs),
-		"plugins_deleted", len(pluginIDs),
-		"summary", "All running resources stopped and cleaned")
+	logger.Info("Follower reset complete")
 }
 
 // createComponentInstance creates actual component instances from configuration
@@ -662,7 +599,6 @@ func (sl *SyncListener) createComponentInstance(componentType, componentName, co
 			return fmt.Errorf("failed to create input instance %s: %w", componentName, err)
 		}
 		project.SetInput(componentName, inp)
-		logger.Debug("Created input instance", "name", componentName)
 
 	case "output":
 		// Import the output package at the top if not already imported
@@ -671,7 +607,6 @@ func (sl *SyncListener) createComponentInstance(componentType, componentName, co
 			return fmt.Errorf("failed to create output instance %s: %w", componentName, err)
 		}
 		project.SetOutput(componentName, out)
-		logger.Debug("Created output instance", "name", componentName)
 
 	case "ruleset":
 		// Import the rules_engine package at the top if not already imported
@@ -680,7 +615,6 @@ func (sl *SyncListener) createComponentInstance(componentType, componentName, co
 			return fmt.Errorf("failed to create ruleset instance %s: %w", componentName, err)
 		}
 		project.SetRuleset(componentName, rs)
-		logger.Debug("Created ruleset instance", "name", componentName)
 
 	case "project":
 		// For projects, we create the project instance
@@ -689,7 +623,6 @@ func (sl *SyncListener) createComponentInstance(componentType, componentName, co
 			return fmt.Errorf("failed to create project instance %s: %w", componentName, err)
 		}
 		project.SetProject(componentName, proj)
-		logger.Debug("Created project instance", "name", componentName)
 
 	case "plugin":
 		// For plugins, we just store the content as plugins are handled differently
@@ -698,7 +631,6 @@ func (sl *SyncListener) createComponentInstance(componentType, componentName, co
 		if err != nil {
 			return fmt.Errorf("failed to create plugin instance %s: %w", componentName, err)
 		}
-		logger.Debug("Created plugin instance", "name", componentName)
 
 	default:
 		return fmt.Errorf("unsupported component type: %s", componentType)
