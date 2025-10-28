@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -138,22 +139,57 @@ func (im *InstructionManager) setCurrentVersion(veresion int64) (int64, error) {
 // loadAllInstructions loads all instructions from Redis
 func (im *InstructionManager) loadAllInstructions(maxVersion int64) ([]*Instruction, error) {
 	var instructions []*Instruction
+	var missingVersions []int64
+	var deletedCount int
 
 	for version := int64(1); version <= maxVersion; version++ {
 		key := fmt.Sprintf("cluster:instruction:%d", version)
 		data, err := common.RedisGet(key)
 		if err != nil {
+			missingVersions = append(missingVersions, version)
+			logger.Warn("Instruction not found in Redis during load", "version", version, "error", err)
+			continue
+		}
+
+		// Check if this is a deleted/compacted instruction marker
+		if data == GetDeletedIntentionsString() {
+			deletedCount++
 			continue
 		}
 
 		var instruction Instruction
 		if err := json.Unmarshal([]byte(data), &instruction); err != nil {
 			logger.Error("Failed to unmarshal instruction", "version", version, "error", err)
+			missingVersions = append(missingVersions, version)
 			continue
 		}
 
 		instructions = append(instructions, &instruction)
 	}
+
+	// Check for missing instructions (data integrity critical)
+	totalExpected := maxVersion
+	missingCount := int64(len(missingVersions))
+
+	if missingCount > 0 {
+		// Any missing instruction is data corruption - we must fail
+		missingRatio := float64(missingCount) / float64(totalExpected) * 100
+		logger.Error("Instructions missing during load - data corruption detected",
+			"total_expected", totalExpected,
+			"instructions_loaded", len(instructions),
+			"deleted_markers", deletedCount,
+			"missing", missingCount,
+			"missing_ratio", fmt.Sprintf("%.2f%%", missingRatio),
+			"missing_versions", missingVersions)
+
+		return nil, fmt.Errorf("data corruption: %d instructions missing out of %d (versions: %v)",
+			missingCount, totalExpected, missingVersions)
+	}
+
+	logger.Info("Loaded instructions from Redis successfully",
+		"total_expected", totalExpected,
+		"instructions_loaded", len(instructions),
+		"deleted_markers", deletedCount)
 
 	return instructions, nil
 }
@@ -474,25 +510,70 @@ func (im *InstructionManager) InitializeLeaderInstructions() error {
 		return fmt.Errorf("only leader can initialize instructions")
 	}
 
-	logger.Info("Initializing leader instructions")
+	logger.Info("Initializing leader instructions", "new_base_version", im.baseVersion)
 
-	_, err := im.setCurrentVersion(0)
+	// Check if there are old instructions from previous session
+	oldVersionStr, err := common.RedisGet("cluster:leader_version")
+	if err == nil && oldVersionStr != "" {
+		// Parse old version to get baseVersion
+		parts := strings.Split(oldVersionStr, ".")
+		if len(parts) == 2 {
+			oldBaseVersion := parts[0]
+			if oldBaseVersion != im.baseVersion {
+				logger.Info("Detected old instructions from previous session, will clean up",
+					"old_base_version", oldBaseVersion,
+					"new_base_version", im.baseVersion,
+					"old_full_version", oldVersionStr)
+
+				// Try to parse the old currentVersion to know how many to clean
+				if oldCurrentVersion, parseErr := strconv.ParseInt(parts[1], 10, 64); parseErr == nil && oldCurrentVersion > 0 {
+					logger.Info("Cleaning up old instructions", "count", oldCurrentVersion)
+					for v := int64(1); v <= oldCurrentVersion; v++ {
+						key := fmt.Sprintf("cluster:instruction:%d", v)
+						if delErr := common.RedisDel(key); delErr != nil {
+							logger.Warn("Failed to delete old instruction", "version", v, "error", delErr)
+						}
+					}
+					logger.Info("Old instructions cleaned up successfully", "cleaned_count", oldCurrentVersion)
+				} else {
+					// If we can't parse, try to clean up a reasonable range (e.g., up to maxInstructions)
+					logger.Warn("Could not parse old currentVersion, will clean up to maxInstructions",
+						"old_version_str", oldVersionStr,
+						"max_to_clean", im.maxInstructions)
+					cleanedCount := 0
+					for v := int64(1); v <= im.maxInstructions; v++ {
+						key := fmt.Sprintf("cluster:instruction:%d", v)
+						if delErr := common.RedisDel(key); delErr == nil {
+							cleanedCount++
+						}
+					}
+					logger.Info("Old instructions cleaned up (best effort)", "cleaned_count", cleanedCount)
+				}
+			} else {
+				logger.Info("Base version matches, no cleanup needed", "base_version", im.baseVersion)
+			}
+		}
+	} else {
+		logger.Info("No previous instructions found in Redis, starting fresh")
+	}
+
+	_, err = im.setCurrentVersion(0)
 	if err != nil {
 		err = fmt.Errorf("failed to write leader version to Redis during initialization: %w", err)
 		return err
 	}
 
 	var instructionCount int64 = 0
+	var failedComponents []string
 
 	// Helper function to publish instruction without triggering compaction
 	publishInstructionDirectly := func(componentName, componentType, content, operation string, dependencies []string, metadata map[string]interface{}) error {
-		instructionCount++
-
 		// Determine if this operation requires project restart
 		requiresRestart := im.operationRequiresRestart(operation, componentType)
 
+		// Prepare instruction with temporary version (will be set after successful write)
 		instruction := Instruction{
-			Version:         instructionCount, // Starts from 1, not 0
+			Version:         instructionCount + 1, // Next version number
 			ComponentName:   componentName,
 			ComponentType:   componentType,
 			Content:         content,
@@ -504,16 +585,18 @@ func (im *InstructionManager) InitializeLeaderInstructions() error {
 		}
 
 		// Store instruction in Redis
-		key := fmt.Sprintf("cluster:instruction:%d", instructionCount)
+		key := fmt.Sprintf("cluster:instruction:%d", instruction.Version)
 		data, err := json.Marshal(instruction)
 		if err != nil {
 			return fmt.Errorf("failed to marshal instruction: %w", err)
 		}
 
-		if _, err := common.RedisSet(key, string(data), 86400); err != nil {
+		if _, err := common.RedisSet(key, string(data), 0); err != nil {
 			return fmt.Errorf("failed to store instruction: %w", err)
 		}
 
+		// Only increment counter after successful write
+		instructionCount++
 		logger.Debug("Published initialization instruction", "version", instructionCount, "component", componentName, "operation", operation)
 		return nil
 	}
@@ -522,6 +605,7 @@ func (im *InstructionManager) InitializeLeaderInstructions() error {
 	common.ForEachRawConfig("input", func(inputID, config string) bool {
 		if err := publishInstructionDirectly(inputID, "input", config, "add", nil, nil); err != nil {
 			logger.Error("Failed to publish input add instruction", "input", inputID, "error", err)
+			failedComponents = append(failedComponents, fmt.Sprintf("input:%s", inputID))
 		}
 		return true
 	})
@@ -530,6 +614,7 @@ func (im *InstructionManager) InitializeLeaderInstructions() error {
 	common.ForEachRawConfig("output", func(outputID, config string) bool {
 		if err := publishInstructionDirectly(outputID, "output", config, "add", nil, nil); err != nil {
 			logger.Error("Failed to publish output add instruction", "output", outputID, "error", err)
+			failedComponents = append(failedComponents, fmt.Sprintf("output:%s", outputID))
 		}
 		return true
 	})
@@ -538,6 +623,7 @@ func (im *InstructionManager) InitializeLeaderInstructions() error {
 	common.ForEachRawConfig("plugin", func(pluginID, config string) bool {
 		if err := publishInstructionDirectly(pluginID, "plugin", config, "add", nil, nil); err != nil {
 			logger.Error("Failed to publish plugin add instruction", "plugin", pluginID, "error", err)
+			failedComponents = append(failedComponents, fmt.Sprintf("plugin:%s", pluginID))
 		}
 		return true
 	})
@@ -546,6 +632,7 @@ func (im *InstructionManager) InitializeLeaderInstructions() error {
 	common.ForEachRawConfig("ruleset", func(rulesetID, config string) bool {
 		if err := publishInstructionDirectly(rulesetID, "ruleset", config, "add", nil, nil); err != nil {
 			logger.Error("Failed to publish ruleset add instruction", "ruleset", rulesetID, "error", err)
+			failedComponents = append(failedComponents, fmt.Sprintf("ruleset:%s", rulesetID))
 		}
 		return true
 	})
@@ -554,6 +641,7 @@ func (im *InstructionManager) InitializeLeaderInstructions() error {
 	common.ForEachRawConfig("project", func(projectID, config string) bool {
 		if err := publishInstructionDirectly(projectID, "project", config, "add", nil, nil); err != nil {
 			logger.Error("Failed to publish project add instruction", "project", projectID, "error", err)
+			failedComponents = append(failedComponents, fmt.Sprintf("project:%s", projectID))
 		}
 		return true
 	})
@@ -566,11 +654,21 @@ func (im *InstructionManager) InitializeLeaderInstructions() error {
 			if wantRunning {
 				if err := publishInstructionDirectly(projectID, "project", "", "start", nil, nil); err != nil {
 					logger.Error("Failed to publish project start instruction", "project", projectID, "error", err)
+					failedComponents = append(failedComponents, fmt.Sprintf("project_start:%s", projectID))
 				} else {
 					logger.Info("Published project start instruction", "project", projectID)
 				}
 			}
 		}
+	}
+
+	// Check if there were any failures during initialization
+	if len(failedComponents) > 0 {
+		logger.Error("Some components or operations failed during initialization",
+			"failed_count", len(failedComponents),
+			"failed_items", failedComponents,
+			"successful_instructions", instructionCount)
+		return fmt.Errorf("initialization incomplete: %d failures occurred: %v", len(failedComponents), failedComponents)
 	}
 
 	// Update final version after all instructions are published
@@ -580,7 +678,9 @@ func (im *InstructionManager) InitializeLeaderInstructions() error {
 		return fmt.Errorf("failed to update final version: %w", err)
 	}
 
-	logger.Info("Leader instructions initialization completed", "final_version", im.getCurrentVersionUnsafe(), "instruction_count", instructionCount)
+	logger.Info("Leader instructions initialization completed successfully",
+		"final_version", im.getCurrentVersionUnsafe(),
+		"instruction_count", instructionCount)
 	return nil
 }
 
@@ -666,12 +766,21 @@ func (im *InstructionManager) Stop() {
 	// Followers should not delete instructions as they are managed by leader
 	if common.IsCurrentNodeLeader() {
 		logger.Info("Leader cleaning up cluster instructions during shutdown")
-		is, _ := im.loadAllInstructions(im.maxInstructions)
-		for _, instruction := range is {
-			key := fmt.Sprintf("cluster:instruction:%d", instruction.Version)
-			_ = common.RedisDel(key)
+
+		im.mu.RLock()
+		currentVer := im.currentVersion
+		im.mu.RUnlock()
+
+		// Delete all instructions from 1 to currentVersion
+		if currentVer > 0 {
+			logger.Info("Deleting instructions", "count", currentVer)
+			for v := int64(1); v <= currentVer; v++ {
+				key := fmt.Sprintf("cluster:instruction:%d", v)
+				_ = common.RedisDel(key)
+			}
 		}
 		_ = common.RedisDel("cluster:leader_version")
+		logger.Info("Leader cleanup completed")
 	} else {
 		logger.Info("Follower stopping instruction manager (not cleaning up cluster instructions)")
 	}
