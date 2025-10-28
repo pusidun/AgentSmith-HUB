@@ -15,7 +15,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -28,17 +27,7 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-// Constants for file extensions
-const (
-	RULESET_EXT     = ".xml"
-	RULESET_EXT_NEW = ".xml.new"
-
-	PLUGIN_EXT     = ".go"
-	PLUGIN_EXT_NEW = ".go.new"
-
-	EXT     = ".yaml"
-	EXT_NEW = ".yaml.new"
-)
+// File extension constants and file operation functions are defined in file_operations.go
 
 // Default templates for new components
 const NewPluginData = `package plugin
@@ -107,96 +96,8 @@ const NewRulesetData = `<root author="name">
 const NewProjectData = `content: |
   INPUT.demo -> OUTPUT.demo`
 
-// Utility functions
-func GetExt(componentType string, new bool) string {
-	if componentType == "ruleset" {
-		if new {
-			return RULESET_EXT_NEW
-		} else {
-			return RULESET_EXT
-		}
-	} else if componentType == "plugin" {
-		if new {
-			return PLUGIN_EXT_NEW
-		} else {
-			return PLUGIN_EXT
-		}
-	} else {
-		if new {
-			return EXT_NEW
-		} else {
-			return EXT
-		}
-	}
-}
-
-func GetComponentPath(componentType string, id string, new bool) (string, bool) {
-	dirPath := path.Join(common.Config.ConfigRoot, componentType)
-	filePath := path.Join(dirPath, id+GetExt(componentType, new))
-
-	//check if dir exists
-	if _, err := os.Stat(dirPath); os.IsNotExist(err) {
-		if err := os.MkdirAll(dirPath, 0755); err != nil {
-			return filePath, false
-		}
-	}
-
-	_, err := os.Stat(filePath)
-	exists := !os.IsNotExist(err)
-
-	return filePath, exists
-}
-
-func WriteComponentFile(path string, content string) error {
-	// Check if this is a temporary file (.new)
-	if strings.HasSuffix(path, ".new") {
-		// Extract component type and ID from path
-		parts := strings.Split(path, "/")
-		if len(parts) >= 2 {
-			componentType := parts[len(parts)-2] // Second to last part is component type
-			filename := parts[len(parts)-1]      // Last part is filename
-
-			var id string
-			// Determine ID based on file extension
-			if strings.HasSuffix(filename, ".xml.new") {
-				id = filename[:len(filename)-8] // Remove .xml.new
-			} else if strings.HasSuffix(filename, ".go.new") {
-				id = filename[:len(filename)-7] // Remove .go.new
-			} else if strings.HasSuffix(filename, ".yaml.new") {
-				id = filename[:len(filename)-9] // Remove .yaml.new
-			}
-
-			// If it's a temporary file, also update the in-memory copy
-			switch componentType {
-			case "input":
-				project.SetInputNew(id, content)
-			case "output":
-				project.SetOutputNew(id, content)
-			case "ruleset":
-				project.SetRulesetNew(id, content)
-			case "project":
-				project.SetProjectNew(id, content)
-			case "plugin":
-				plugin.SetPluginNew(id, content)
-			}
-		}
-	}
-
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		return fmt.Errorf("failed to write file %s: %w", path, err)
-	}
-
-	return nil
-}
-
-func ReadComponent(path string) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	} else {
-		return string(data), err
-	}
-}
+// Note: File operation functions (GetExt, GetComponentPath, WriteComponentFile, ReadComponent)
+// have been moved to file_operations.go for better code organization
 
 // Type definitions
 type FileChecksum struct {
