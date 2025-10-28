@@ -2,6 +2,7 @@ package common
 
 import (
 	"os"
+	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
@@ -109,8 +110,8 @@ func (sm *SystemMonitor) collectMetrics() {
 	// Calculate CPU usage (simplified approach)
 	cpuPercent := sm.calculateCPUPercent()
 
-	// Memory metrics
-	memoryUsedMB := float64(memStats.Alloc) / 1024 / 1024
+	// Memory metrics - use RSS for accurate process memory usage
+	memoryUsedMB := getProcessRSSMB()
 
 	// Get system total memory for accurate percentage calculation
 	systemMemoryGB := getSystemMemoryGB()
@@ -170,17 +171,22 @@ func (sm *SystemMonitor) calculateCPUPercent() float64 {
 		return 0.1
 	}
 
-	// Calculate CPU percentage (total across all cores)
+	// Calculate CPU percentage relative to system total CPU
+	// cpuTimeDiff is the CPU time consumed by the process
+	// wallTimeDiff is the wall clock time elapsed
+	// cpuTimeDiff / wallTimeDiff gives CPU utilization
+	// Dividing by numCPU normalizes to 0-100% range
 	cpuPercent := float64(cpuTimeDiff) / float64(wallTimeDiff) * 100
 
-	// Normalize to average per-core usage (0-100%)
-	// This makes the value more intuitive for monitoring
+	// Normalize to per-core usage (0-100%)
+	// This represents the true percentage of a single core used
+	// For example, 100% means using one full core, 50% means using half a core
 	numCPU := float64(runtime.NumCPU())
 	if numCPU > 0 {
 		cpuPercent = cpuPercent / numCPU
 	}
 
-	// Cap at 100% (shouldn't exceed for normalized value)
+	// Cap at 100% (a process can't use more than 100% of a single core's time)
 	if cpuPercent > 100 {
 		cpuPercent = 100
 	}
@@ -209,6 +215,43 @@ func getCurrentProcessCPUTime() time.Duration {
 	return userTime + sysTime
 }
 
+// getProcessRSSMB gets the current process RSS (Resident Set Size) memory in MB
+func getProcessRSSMB() float64 {
+	// For Linux, read from /proc/self/status
+	if runtime.GOOS == "linux" {
+		if data, err := os.ReadFile("/proc/self/status"); err == nil {
+			lines := strings.Split(string(data), "\n")
+			for _, line := range lines {
+				if strings.HasPrefix(line, "VmRSS:") {
+					fields := strings.Fields(line)
+					if len(fields) >= 2 {
+						if kb, err := strconv.ParseFloat(fields[1], 64); err == nil {
+							return kb / 1024 // Convert KB to MB
+						}
+					}
+					break
+				}
+			}
+		}
+	}
+
+	// For macOS and other Unix systems, use ps command to get RSS
+	if runtime.GOOS == "darwin" || runtime.GOOS == "freebsd" || runtime.GOOS == "openbsd" {
+		cmd := exec.Command("ps", "-o", "rss=", "-p", strconv.Itoa(os.Getpid()))
+		output, err := cmd.Output()
+		if err == nil {
+			if rssKB, err := strconv.ParseFloat(strings.TrimSpace(string(output)), 64); err == nil {
+				return rssKB / 1024 // Convert KB to MB
+			}
+		}
+	}
+
+	// Fallback to runtime memStats.Alloc if we can't get RSS
+	var memStats runtime.MemStats
+	runtime.ReadMemStats(&memStats)
+	return float64(memStats.Alloc) / 1024 / 1024
+}
+
 // getSystemMemoryGB attempts to get system total memory in GB
 func getSystemMemoryGB() float64 {
 	// Try to read from /proc/meminfo on Linux
@@ -227,10 +270,17 @@ func getSystemMemoryGB() float64 {
 		}
 	}
 
-	// For macOS and other systems, use a more conservative estimation
+	// For macOS, use sysctl to get actual system memory
 	if runtime.GOOS == "darwin" {
-		// macOS systems, use conservative estimate based on typical configurations
-		// Most modern Macs have 8GB+, development machines often have 16GB+
+		cmd := exec.Command("sysctl", "-n", "hw.memsize")
+		output, err := cmd.Output()
+		if err == nil {
+			if memsizeBytes, err := strconv.ParseFloat(strings.TrimSpace(string(output)), 64); err == nil {
+				memsizeGB := memsizeBytes / 1024 / 1024 / 1024
+				return memsizeGB
+			}
+		}
+		// Fallback to conservative estimate if sysctl fails
 		return 16.0
 	}
 

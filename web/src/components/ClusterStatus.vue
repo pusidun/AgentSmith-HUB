@@ -218,7 +218,10 @@
                     ></div>
                   </div>
                   <span class="text-sm font-semibold min-w-max" :class="getLoadAwareMemoryColor(node)">
-                    {{ node.metrics.memoryUsedMB.toFixed(1) }}MB
+                    {{ node.metrics.memoryPercent.toFixed(1) }}%
+                  </span>
+                  <span class="text-[10px] px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded whitespace-nowrap font-medium">
+                    ({{ node.metrics.memoryUsedMB.toFixed(0) }}MB)
                   </span>
                 </div>
               </div>
