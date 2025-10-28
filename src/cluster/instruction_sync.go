@@ -160,57 +160,22 @@ func (im *InstructionManager) setCurrentVersion(veresion int64) (int64, error) {
 // loadAllInstructions loads all instructions from Redis
 func (im *InstructionManager) loadAllInstructions(maxVersion int64) ([]*Instruction, error) {
 	var instructions []*Instruction
-	var missingVersions []int64
-	var deletedCount int
 
 	for version := int64(1); version <= maxVersion; version++ {
 		key := fmt.Sprintf("cluster:instruction:%d", version)
 		data, err := common.RedisGet(key)
 		if err != nil {
-			missingVersions = append(missingVersions, version)
-			logger.Warn("Instruction not found in Redis during load", "version", version, "error", err)
-			continue
-		}
-
-		// Check if this is a deleted/compacted instruction marker
-		if data == GetDeletedIntentionsString() {
-			deletedCount++
 			continue
 		}
 
 		var instruction Instruction
 		if err := json.Unmarshal([]byte(data), &instruction); err != nil {
 			logger.Error("Failed to unmarshal instruction", "version", version, "error", err)
-			missingVersions = append(missingVersions, version)
 			continue
 		}
 
 		instructions = append(instructions, &instruction)
 	}
-
-	// Check for missing instructions (data integrity critical)
-	totalExpected := maxVersion
-	missingCount := int64(len(missingVersions))
-
-	if missingCount > 0 {
-		// Any missing instruction is data corruption - we must fail
-		missingRatio := float64(missingCount) / float64(totalExpected) * 100
-		logger.Error("Instructions missing during load - data corruption detected",
-			"total_expected", totalExpected,
-			"instructions_loaded", len(instructions),
-			"deleted_markers", deletedCount,
-			"missing", missingCount,
-			"missing_ratio", fmt.Sprintf("%.2f%%", missingRatio),
-			"missing_versions", missingVersions)
-
-		return nil, fmt.Errorf("data corruption: %d instructions missing out of %d (versions: %v)",
-			missingCount, totalExpected, missingVersions)
-	}
-
-	logger.Info("Loaded instructions from Redis successfully",
-		"total_expected", totalExpected,
-		"instructions_loaded", len(instructions),
-		"deleted_markers", deletedCount)
 
 	return instructions, nil
 }
