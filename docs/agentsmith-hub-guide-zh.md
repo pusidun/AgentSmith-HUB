@@ -645,6 +645,26 @@ OIDC_SCOPE="openid profile email"
 <plugin>blockIP(malicious_ip, block_duration)</plugin>
 ```
 
+**静态文本中的模板插值（新功能）：**
+
+现在可以在单个静态字符串中使用多个变量插值，用于创建动态描述或消息：
+
+```xml
+<!-- 内嵌变量插值 -->
+<append field="description">检测到从 _$src 到 _$dst 的扫描行为</append>
+
+<!-- 带数组访问 -->
+<append field="alert">用户 _$user.id 访问了 _$items.#0.path</append>
+
+<!-- 转义字面量 _$ -->
+<append field="msg">价格是 \$100，字段：\_$field</append>
+```
+
+**行为说明：**
+- 如果字段存在：替换为实际值
+- 如果字段不存在：保留占位符（例如 `_$unknown` 保持不变）
+- 使用 `\_$` 转义：输出字面量 `_$` 而不进行替换
+
 **_$ORIDATA 的使用：**
 `_$ORIDATA` 代表整个原始数据对象，常用于：
 - 将完整数据传递给插件进行复杂处理；

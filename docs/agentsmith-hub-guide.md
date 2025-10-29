@@ -649,6 +649,26 @@ The `_$` prefix is used to dynamically reference other field values in the data,
 <plugin>blockIP(malicious_ip, block_duration)</plugin>
 ```
 
+**Template Interpolation in Static Text (New Feature):**
+
+You can now use multiple variable interpolations within a single static string. This is useful for creating dynamic descriptions or messages:
+
+```xml
+<!-- Inline variable interpolation -->
+<append field="description">Detected scanning from _$src to _$dst</append>
+
+<!-- With array access -->
+<append field="alert">User _$user.id accessed _$items.#0.path</append>
+
+<!-- Escape literal _$ -->
+<append field="msg">Price is \$100, field: \_$field</append>
+```
+
+**Behavior:**
+- If field exists: Replaced with actual value
+- If field doesn't exist: Keeps the placeholder (e.g., `_$unknown` stays as-is)
+- Escape with `\_$`: Outputs literal `_$` without replacement
+
 **Usage of _$ORIDATA:**
 `_$ORIDATA` represents the entire original data object, commonly used for:
 - Passing complete data to plugins for complex processing
