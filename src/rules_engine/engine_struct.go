@@ -1801,6 +1801,21 @@ func Verify(path string, raw string) error {
 		return fmt.Errorf("failed to validate resource: %w", err)
 	}
 
+	// Cleanup caches created during verification to prevent memory leaks
+	// Verify creates temporary ruleset objects that should not persist
+	if ruleset.Cache != nil {
+		ruleset.Cache.Close()
+		ruleset.Cache = nil
+	}
+	if ruleset.CacheForClassify != nil {
+		ruleset.CacheForClassify.Close()
+		ruleset.CacheForClassify = nil
+	}
+	if ruleset.RegexResultCache != nil {
+		ruleset.RegexResultCache.Clear()
+		ruleset.RegexResultCache = nil
+	}
+
 	return nil
 }
 
@@ -1837,6 +1852,20 @@ func NewRuleset(path string, raw string, id string) (*Ruleset, error) {
 	// IMPORTANT: Must call RulesetBuild to initialize all the parsed components
 	err = RulesetBuild(ruleset)
 	if err != nil {
+		// Cleanup caches created during RulesetBuild if it failed
+		// to prevent memory leaks when ruleset creation fails
+		if ruleset.Cache != nil {
+			ruleset.Cache.Close()
+			ruleset.Cache = nil
+		}
+		if ruleset.CacheForClassify != nil {
+			ruleset.CacheForClassify.Close()
+			ruleset.CacheForClassify = nil
+		}
+		if ruleset.RegexResultCache != nil {
+			ruleset.RegexResultCache.Clear()
+			ruleset.RegexResultCache = nil
+		}
 		return nil, fmt.Errorf("ruleset build error: %s %w", id, err)
 	}
 
@@ -2006,6 +2035,11 @@ func NewFromExisting(existing *Ruleset, newProjectNodeSequence string) (*Ruleset
 			BufferItems: 256,              // number of keys per Get buffer.
 		})
 		if err != nil {
+			// Cleanup Cache if it was created to prevent memory leak
+			if newRuleset.Cache != nil {
+				newRuleset.Cache.Close()
+				newRuleset.Cache = nil
+			}
 			return nil, fmt.Errorf("failed to create classify cache: %w", err)
 		}
 	}

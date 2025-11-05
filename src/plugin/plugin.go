@@ -123,6 +123,11 @@ func Verify(path string, raw string, name string) error {
 
 	p := &Plugin{Path: path, Payload: content}
 	err = p.yaegiLoad()
+	// Cleanup yaegi interpreter created during verification to prevent memory leaks
+	// Verify creates temporary Plugin objects that should not persist
+	if p.yaegiIntp != nil {
+		p.yaegiIntp = nil
+	}
 	p = nil
 	return err
 }
