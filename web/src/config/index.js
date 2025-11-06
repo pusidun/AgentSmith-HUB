@@ -7,15 +7,7 @@
 const defaultConfig = {
   // API Configuration
   apiBaseUrl: '/api',
-  apiTimeout: 30000, // 30 seconds
-  
-  // Feature flags
-  enableDebugMode: false,
-  enableClusterMode: true,
-  
-  // UI Configuration
-  theme: 'light',
-  language: 'en'
+  apiTimeout: 30000 // 30 seconds
 };
 
 // Environment-based configuration (build-time)
@@ -25,11 +17,7 @@ const envConfig = {
               (import.meta.env.DEV 
                 ? 'http://localhost:8080' 
                 : '/api'),
-  apiTimeout: import.meta.env.VITE_API_TIMEOUT ? parseInt(import.meta.env.VITE_API_TIMEOUT) : 30000,
-  enableDebugMode: import.meta.env.VITE_DEBUG_MODE === 'true',
-  enableClusterMode: import.meta.env.VITE_CLUSTER_MODE !== 'false',
-  theme: import.meta.env.VITE_THEME || 'light',
-  language: import.meta.env.VITE_LANGUAGE || 'en'
+  apiTimeout: import.meta.env.VITE_API_TIMEOUT ? parseInt(import.meta.env.VITE_API_TIMEOUT) : 30000
 };
 
 // Runtime configuration (loaded from external file)
