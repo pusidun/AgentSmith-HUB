@@ -3,6 +3,5 @@
   "apiTimeout": "${API_TIMEOUT:-30000}",
   "enableDebugMode": "${DEBUG_MODE:-false}",
   "enableClusterMode": "${CLUSTER_MODE:-true}",
-  "theme": "${THEME:-light}",
   "language": "${LANGUAGE:-en}"
 } 
