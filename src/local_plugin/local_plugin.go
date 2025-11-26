@@ -22,6 +22,7 @@ import (
 	edomain "AgentSmith-HUB/local_plugin/url/extract_domain"
 	esub "AgentSmith-HUB/local_plugin/url/extract_subdomain"
 	etld "AgentSmith-HUB/local_plugin/url/extract_tld"
+	parseuri "AgentSmith-HUB/local_plugin/url/parse_uri"
 
 	// geo
 	"AgentSmith-HUB/local_plugin/geo_match"
@@ -76,6 +77,7 @@ var LocalPluginInterfaceAndBoolRes = map[string]func(...interface{}) (interface{
 	"extractDomain":    edomain.Eval,
 	"extractTLD":       etld.Eval,
 	"extractSubdomain": esub.Eval,
+	"parseURI":         parseuri.Eval,
 
 	// user agent
 	"parseUA": pua.Eval,
@@ -117,6 +119,7 @@ var LocalPluginDesc = map[string]string{
 	"extractDomain":    "Append: extract domain from URL/host. Args: urlOrHost string.",
 	"extractTLD":       "Append: extract TLD from domain. Args: domain string.",
 	"extractSubdomain": "Append: extract subdomain from host. Args: host string.",
+	"parseURI":         "Append: parse URI string into JSON object with path, query parameters, and other components. Args: uri string.",
 
 	// ua
 	"parseUA": "Append: parse user agent to map. Args: ua string.",
